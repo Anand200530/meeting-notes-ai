@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, TextInput, FlatList, Modal, Alert, ActivityIndicator, ScrollView, Share, SafeAreaView, StatusBar, Clipboard, Linking } from 'react-native';
+import { StyleSheet, Text, View, TouchableOpacity, TextInput, FlatList, Modal, Alert, ActivityIndicator, ScrollView, Share, SafeAreaView, StatusBar, Clipboard, Linking, KeyboardAvoidingView, Platform, Keyboard } from 'react-native';
 import { Audio } from 'expo-av';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Print from 'expo-print';
@@ -68,11 +68,9 @@ export default function HomeScreen() {
   const addSpeaker = () => { const n = speakerInput.trim(); if (n && !speakers.includes(n)) { setSpeakers([...speakers, n]); setSpeakerInput(''); } };
   const removeSpeaker = (n) => setSpeakers(speakers.filter(s => s !== n));
 
-  // Generate summary from manual transcript
   const handleManualSummary = async () => {
     if (!manualTranscript.trim()) { Alert.alert('Error', 'Please enter a transcript'); return; }
     if (!hasApiKey(apiKey)) { Alert.alert('API Key Required', 'Add your OpenAI API key to generate summary.'); return; }
-    
     setProcessing(true);
     try {
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -84,11 +82,9 @@ export default function HomeScreen() {
           temperature: 0.3, response_format: { type: 'json_object' }
         }),
       });
-      
       if (!response.ok) throw new Error('AI failed');
       const data = await response.json();
       const aiSummary = JSON.parse(data.choices[0].message.content);
-      
       const updatedMeeting = { ...selected, transcript: manualTranscript, aiSummary };
       setMeetings(meetings.map(m => m.id === selected.id ? updatedMeeting : m));
       setSelected(updatedMeeting);
@@ -152,48 +148,53 @@ export default function HomeScreen() {
       <TouchableOpacity style={styles.fab} onPress={() => setShowRecord(true)}><Text style={styles.fabIcon}>+</Text></TouchableOpacity>
 
       <Modal visible={showRecord} transparent animationType="slide">
-        <View style={styles.modalOverlay}><ScrollView><View style={styles.modal}>
-          <View style={styles.modalHeader}><Text style={styles.modalTitle}>NEW RECORDING</Text><TouchableOpacity onPress={() => { setShowRecord(false); if (timer) clearInterval(timer); setIsRecording(false); }}><Text style={styles.modalClose}>X</Text></TouchableOpacity></View>
-          <TextInput style={styles.titleInput} placeholder="Meeting title..." value={title} onChangeText={setTitle} />
-          <View style={styles.folderSelect}>{FOLDERS.slice(1).map(f => <TouchableOpacity key={f} style={[styles.chip, recFolder === f && styles.chipActive]} onPress={() => setRecFolder(f)}><Text style={[styles.chipText, recFolder === f && styles.chipTextActive]}>{f}</Text></TouchableOpacity>)}</View>
-          <Text style={styles.speakerLabel}>Tag Speakers (optional)</Text>
-          <View style={styles.speakerInputRow}><TextInput style={styles.speakerInput} placeholder="Enter name..." value={speakerInput} onChangeText={setSpeakerInput} onSubmitEditing={addSpeaker} /><TouchableOpacity style={styles.addSpeakerBtn} onPress={addSpeaker}><Text style={styles.addSpeakerText}>ADD</Text></TouchableOpacity></View>
-          {speakers.length > 0 && <View style={styles.speakerTags}>{speakers.map((s, i) => <TouchableOpacity key={i} style={styles.speakerTag} onPress={() => removeSpeaker(s)}><Text style={styles.speakerTagText}>{s} ×</Text></TouchableOpacity>)}</View>}
-          <View style={styles.recArea}>
-            <TouchableOpacity style={[styles.recBtn, isRecording && styles.recBtnActive]} onPress={toggleRecording}>
-              <View style={[styles.recBtnInner, isRecording && styles.recBtnInnerActive]}>
-                <Text style={styles.recIcon}>{isRecording ? '⏹ STOP' : '🎤 START'}</Text>
-              </View>
-            </TouchableOpacity>
-            <Text style={styles.recTime}>{isRecording ? 'Recording ' + formatTime(duration) : 'Tap to start recording'}</Text>
-            {isRecording && <Text style={styles.recHint}>Tap again to stop</Text>}
-          </View>
-        </View></ScrollView></View>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
+          <ScrollView keyboardShouldPersistTaps="handled"><View style={styles.modal}>
+            <View style={styles.modalHeader}><Text style={styles.modalTitle}>NEW RECORDING</Text><TouchableOpacity onPress={() => { setShowRecord(false); if (timer) clearInterval(timer); setIsRecording(false); Keyboard.dismiss(); }}><Text style={styles.modalClose}>X</Text></TouchableOpacity></View>
+            <TextInput style={styles.titleInput} placeholder="Meeting title..." value={title} onChangeText={setTitle} />
+            <View style={styles.folderSelect}>{FOLDERS.slice(1).map(f => <TouchableOpacity key={f} style={[styles.chip, recFolder === f && styles.chipActive]} onPress={() => setRecFolder(f)}><Text style={[styles.chipText, recFolder === f && styles.chipTextActive]}>{f}</Text></TouchableOpacity>)}</View>
+            <Text style={styles.speakerLabel}>Tag Speakers (optional)</Text>
+            <View style={styles.speakerInputRow}><TextInput style={styles.speakerInput} placeholder="Enter name..." value={speakerInput} onChangeText={setSpeakerInput} onSubmitEditing={addSpeaker} /><TouchableOpacity style={styles.addSpeakerBtn} onPress={addSpeaker}><Text style={styles.addSpeakerText}>ADD</Text></TouchableOpacity></View>
+            {speakers.length > 0 && <View style={styles.speakerTags}>{speakers.map((s, i) => <TouchableOpacity key={i} style={styles.speakerTag} onPress={() => removeSpeaker(s)}><Text style={styles.speakerTagText}>{s} ×</Text></TouchableOpacity>)}</View>}
+            <View style={styles.recArea}>
+              <TouchableOpacity style={[styles.recBtn, isRecording && styles.recBtnActive]} onPress={toggleRecording}>
+                <View style={[styles.recBtnInner, isRecording && styles.recBtnInnerActive]}>
+                  <Text style={styles.recIcon}>{isRecording ? '⏹ STOP' : '🎤 START'}</Text>
+                </View>
+              </TouchableOpacity>
+              <Text style={styles.recTime}>{isRecording ? 'Recording ' + formatTime(duration) : 'Tap to start recording'}</Text>
+              {isRecording && <Text style={styles.recHint}>Tap again to stop</Text>}
+            </View>
+          </View></ScrollView>
+        </KeyboardAvoidingView>
       </Modal>
 
       <Modal visible={showSettings} transparent animationType="slide">
-        <View style={styles.modalOverlay}><View style={styles.modal}>
-          <View style={styles.modalHeader}><Text style={styles.modalTitle}>API SETTINGS</Text><TouchableOpacity onPress={() => setShowSettings(false)}><Text style={styles.modalClose}>X</Text></TouchableOpacity></View>
-          <Text style={styles.apiLabel}>OpenAI API Key *Required for AI</Text>
-          <TextInput style={styles.apiInput} placeholder="sk-..." secureTextEntry value={apiKey} onChangeText={saveApiKey} />
-          <Text style={styles.apiHint}>Get key from platform.openai.com/api-keys</Text>
-          {!hasApiKey(apiKey) && apiKey.length > 0 && <View style={styles.apiError}><Text style={styles.apiErrorText}>Invalid. Must start with "sk-"</Text></View>}
-          {hasApiKey(apiKey) && <View style={styles.apiSuccess}><Text style={styles.apiSuccessText}>✓ API Key configured</Text></View>}
-          <TouchableOpacity style={styles.saveBtn} onPress={() => setShowSettings(false)}><Text style={styles.saveBtnText}>{hasApiKey(apiKey) ? 'SAVE' : 'CLOSE'}</Text></TouchableOpacity>
-          <TouchableOpacity style={styles.linkBtn} onPress={() => Linking.openURL('https://platform.openai.com/api-keys')}><Text style={styles.linkBtnText}>Get API Key →</Text></TouchableOpacity>
-        </View></View>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
+          <ScrollView keyboardShouldPersistTaps="handled"><View style={styles.modal}>
+            <View style={styles.modalHeader}><Text style={styles.modalTitle}>API SETTINGS</Text><TouchableOpacity onPress={() => { setShowSettings(false); Keyboard.dismiss(); }}><Text style={styles.modalClose}>X</Text></TouchableOpacity></View>
+            <Text style={styles.apiLabel}>OpenAI API Key *Required for AI</Text>
+            <TextInput style={styles.apiInput} placeholder="sk-..." secureTextEntry value={apiKey} onChangeText={saveApiKey} />
+            <Text style={styles.apiHint}>Get key from platform.openai.com/api-keys</Text>
+            {!hasApiKey(apiKey) && apiKey.length > 0 && <View style={styles.apiError}><Text style={styles.apiErrorText}>Invalid. Must start with "sk-"</Text></View>}
+            {hasApiKey(apiKey) && <View style={styles.apiSuccess}><Text style={styles.apiSuccessText}>✓ API Key configured</Text></View>}
+            <TouchableOpacity style={styles.saveBtn} onPress={() => { setShowSettings(false); Keyboard.dismiss(); }}><Text style={styles.saveBtnText}>{hasApiKey(apiKey) ? 'SAVE' : 'CLOSE'}</Text></TouchableOpacity>
+            <TouchableOpacity style={styles.linkBtn} onPress={() => Linking.openURL('https://platform.openai.com/api-keys')}><Text style={styles.linkBtnText}>Get API Key →</Text></TouchableOpacity>
+          </View></ScrollView>
+        </KeyboardAvoidingView>
       </Modal>
 
-      {/* Manual Transcript Input Modal */}
       <Modal visible={showTranscriptInput} transparent animationType="slide">
-        <View style={styles.modalOverlay}><View style={styles.modal}>
-          <View style={styles.modalHeader}><Text style={styles.modalTitle}>ENTER TRANSCRIPT</Text><TouchableOpacity onPress={() => { setShowTranscriptInput(false); setManualTranscript(''); }}><Text style={styles.modalClose}>X</Text></TouchableOpacity></View>
-          <Text style={styles.apiHint}>Type or paste the meeting transcript below, then generate AI summary.</Text>
-          <TextInput style={styles.transcriptInput} placeholder="Paste or type transcript here..." value={manualTranscript} onChangeText={setManualTranscript} multiline numberOfLines={8} textAlignVertical="top" />
-          <TouchableOpacity style={styles.saveBtn} onPress={handleManualSummary} disabled={processing}>
-            {processing ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveBtnText}>GENERATE SUMMARY</Text>}
-          </TouchableOpacity>
-        </View></View>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
+          <ScrollView keyboardShouldPersistTaps="handled"><View style={styles.modal}>
+            <View style={styles.modalHeader}><Text style={styles.modalTitle}>ENTER TRANSCRIPT</Text><TouchableOpacity onPress={() => { setShowTranscriptInput(false); setManualTranscript(''); Keyboard.dismiss(); }}><Text style={styles.modalClose}>X</Text></TouchableOpacity></View>
+            <Text style={styles.apiHint}>Type or paste the meeting transcript, then generate AI summary.</Text>
+            <TextInput style={styles.transcriptInput} placeholder="Paste or type transcript here..." value={manualTranscript} onChangeText={setManualTranscript} multiline numberOfLines={8} textAlignVertical="top" />
+            <TouchableOpacity style={styles.saveBtn} onPress={handleManualSummary} disabled={processing}>
+              {processing ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveBtnText}>GENERATE SUMMARY</Text>}
+            </TouchableOpacity>
+          </View></ScrollView>
+        </KeyboardAvoidingView>
       </Modal>
 
       <Modal visible={!!selected} transparent animationType="slide">
@@ -203,22 +204,14 @@ export default function HomeScreen() {
             <Text style={styles.detailTitle}>{selected?.title}</Text>
             <Text style={styles.detailMeta}>{selected?.duration} • {selected?.folder} • {new Date(selected?.date).toLocaleDateString()}</Text>
             {selected?.speakers?.length > 0 && <View style={styles.speakersBox}><Text style={styles.speakersLabel}>Speakers</Text><View style={styles.speakersRow}>{selected.speakers.map((s, i) => <Text key={i} style={styles.speakerBadge}>{s}</Text>)}</View></View>}
-            
-            {/* Two options to generate summary */}
             {!selected?.aiSummary && (
               <View style={styles.optionsBox}>
                 <Text style={styles.optionsTitle}>Generate AI Summary</Text>
-                <TouchableOpacity style={styles.processBtn} onPress={handleProcess}>
-                  <Text style={styles.processBtnText}>FROM AUDIO (Requires API)</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.manualBtn} onPress={() => setShowTranscriptInput(true)}>
-                  <Text style={styles.manualBtnText}>FROM TRANSCRIPT (Manual)</Text>
-                </TouchableOpacity>
+                <TouchableOpacity style={styles.processBtn} onPress={handleProcess}><Text style={styles.processBtnText}>FROM AUDIO (Requires API)</Text></TouchableOpacity>
+                <TouchableOpacity style={styles.manualBtn} onPress={() => setShowTranscriptInput(true)}><Text style={styles.manualBtnText}>FROM TRANSCRIPT (Manual)</Text></TouchableOpacity>
               </View>
             )}
-            
             {processing && <View style={styles.processingBox}><ActivityIndicator size="small" color={COLORS.accent} /><Text style={styles.processingText}>{processingStatus === 'transcribing' ? 'Transcribing...' : processingStatus === 'summarizing' ? 'Generating summary...' : 'Processing...'}</Text></View>}
-            
             {selected?.aiSummary && (<>
               <View style={styles.section}><Text style={styles.sectionTitle}>SUMMARY</Text><Text style={styles.sectionText}>{selected.aiSummary.summary}</Text></View>
               <View style={styles.section}><Text style={styles.sectionTitle}>KEY POINTS</Text>{selected.aiSummary.keyPoints?.map((p, i) => <View key={i} style={styles.listItem}><Text style={styles.bullet}>•</Text><Text style={styles.listText}>{p}</Text></View>)}</View>
