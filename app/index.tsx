@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, TextInput, FlatList, Modal, Alert, ActivityIndicator, ScrollView, Share, SafeAreaView, StatusBar, Clipboard, Linking, KeyboardAvoidingView, Platform, Keyboard } from 'react-native';
+import { StyleSheet, Text, View, TouchableOpacity, TextInput, FlatList, Modal, Alert, ActivityIndicator, ScrollView, Share, SafeAreaView, StatusBar, Clipboard, Linking, Keyboard, TouchableWithoutFeedback } from 'react-native';
 import { Audio } from 'expo-av';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Print from 'expo-print';
@@ -40,6 +40,15 @@ export default function HomeScreen() {
   const saveApiKey = async (key) => { setApiKey(key); try { await AsyncStorage.setItem('@settings', JSON.stringify({ openai: key })); } catch {} };
   const filtered = meetings.filter(m => (folder === 'All' || m.folder === folder) && m.title.toLowerCase().includes(search.toLowerCase()));
 
+  const closeModals = () => {
+    setShowRecord(false);
+    setShowSettings(false);
+    setShowTranscriptInput(false);
+    if (timer) clearInterval(timer);
+    setIsRecording(false);
+    Keyboard.dismiss();
+  };
+
   const toggleRecording = async () => {
     if (isRecording) {
       if (timer) clearInterval(timer);
@@ -50,7 +59,8 @@ export default function HomeScreen() {
         await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
         const newMeeting = { id: Date.now().toString(), title: title || 'Meeting ' + (meetings.length + 1), duration: formatTime(duration), date: new Date().toISOString(), audioUri: uri, folder: recFolder, speakers, aiSummary: null, hasAudio: true, transcript: '' };
         setMeetings([newMeeting, ...meetings]);
-        setShowRecord(false); setTitle(''); setDuration(0); setRecording(null); setSpeakers([]); setSpeakerInput('');
+        closeModals();
+        setTitle(''); setDuration(0); setRecording(null); setSpeakers([]); setSpeakerInput('');
       } catch (e) { Alert.alert('Error', 'Could not save recording'); }
     } else {
       try {
@@ -70,21 +80,17 @@ export default function HomeScreen() {
 
   const handleManualSummary = async () => {
     if (!manualTranscript.trim()) { Alert.alert('Error', 'Please enter a transcript'); return; }
-    if (!hasApiKey(apiKey)) { Alert.alert('API Key Required', 'Add your OpenAI API key to generate summary.'); return; }
+    if (!hasApiKey(apiKey)) { Alert.alert('API Key Required', 'Add your OpenAI API key.'); return; }
     setProcessing(true);
     try {
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-        body: JSON.stringify({
-          model: 'gpt-3.5-turbo',
-          messages: [{ role: 'system', content: 'You are a meeting notes analyzer. Return valid JSON.' }, { role: 'user', content: `Analyze this transcript and provide JSON with summary, keyPoints, actionItems, questions.\n\nTranscript:\n${manualTranscript.substring(0, 6000)}` }],
-          temperature: 0.3, response_format: { type: 'json_object' }
-        }),
+        body: JSON.stringify({ model: 'gpt-3.5-turbo', messages: [{ role: 'system', content: 'You are a meeting notes analyzer. Return valid JSON.' }, { role: 'user', content: `Analyze and provide JSON with summary, keyPoints, actionItems, questions.\n\n${manualTranscript.substring(0, 6000)}` }], temperature: 0.3, response_format: { type: 'json_object' } }),
       });
       if (!response.ok) throw new Error('AI failed');
       const data = await response.json();
-      const aiSummary = JSON.parse(data.choices[0].message.content);
+      const aiSummary = JSON.parse(data.const data = awaitchoices[0].message.content);
       const updatedMeeting = { ...selected, transcript: manualTranscript, aiSummary };
       setMeetings(meetings.map(m => m.id === selected.id ? updatedMeeting : m));
       setSelected(updatedMeeting);
@@ -97,14 +103,7 @@ export default function HomeScreen() {
 
   const handleProcess = async () => {
     if (!selected) return;
-    if (!hasApiKey(apiKey)) { 
-      Alert.alert('No API Key', 'You can either:\n\n1. Add OpenAI API key, OR\n2. Enter transcript manually', [
-        { text: 'Add API Key', onPress: () => setShowSettings(true) },
-        { text: 'Enter Transcript', onPress: () => setShowTranscriptInput(true) },
-        { text: 'Cancel', style: 'cancel' }
-      ]);
-      return;
-    }
+    if (!hasApiKey(apiKey)) { Alert.alert('No API Key', 'Add API key or enter transcript manually', [{ text: 'Add API Key', onPress: () => setShowSettings(true) }, { text: 'Enter Transcript', onPress: () => setShowTranscriptInput(true) }, { text: 'Cancel', style: 'cancel' }]); return; }
     if (!selected.hasAudio) { Alert.alert('No Recording', 'Record a meeting first.'); return; }
     setProcessing(true);
     try {
@@ -125,8 +124,8 @@ export default function HomeScreen() {
   };
 
   const exportAsPDF = async (meeting) => {
-    const html = '<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{font-family:-apple-system,sans-serif;padding:40px;max-width:800px;margin:0 auto}h1{color:#1a1a1a;font-size:24px}.meta{color:#6b7280;font-size:14px;margin-bottom:24px}.section{background:#f3f4f6;padding:16px;border-radius:8px;margin-bottom:16px}h2{color:#2563eb;font-size:14px;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px}p,li{color:#1f2937;line-height:1.6}ul{padding-left:20px}.action{color:#22c55e}</style></head><body><h1>' + meeting.title + '</h1><div class="meta">' + meeting.duration + ' • ' + meeting.folder + ' • ' + new Date(meeting.date).toLocaleDateString() + '</div>' + (meeting.aiSummary ? '<div class="section"><h2>Summary</h2><p>' + meeting.aiSummary.summary + '</p></div><div class="section"><h2>Key Points</h2><ul>' + meeting.aiSummary.keyPoints?.map(p => '<li>' + p + '</li>').join('') + '</ul></div><div class="section"><h2>Action Items</h2><ul>' + meeting.aiSummary.actionItems?.map(a => '<li class="action">✓ ' + a + '</li>').join('') + '</ul></div>' : '<p>No AI summary yet.</p>') + '</body></html>';
-    try { const { uri } = await Print.printToFileAsync({ html }); await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Export Meeting Notes', UTI: 'com.adobe.pdf' }); } catch (e) { Alert.alert('Error', 'Could not export PDF'); }
+    const html = '<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{font-family:-apple-system,sans-serif;padding:40px;max-width:800px;margin:0 auto}h1{color:#1a1a1a;font-size:24px}.meta{color:#6b7280;font-size:14px;margin-bottom:24px}.section{background:#f3f4f6;padding:16px;border-radius:8px;margin-bottom:16px}h2{color:#2563eb;font-size:14px;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px}p,li{color:#1f2937;line-height:1.6}ul{padding-left:20px}.action{color:#22c55e}</style></head><body><h1>' + meeting.title + '</h1><div class="meta">' + meeting.duration + ' • ' + meeting.folder + ' • ' + new Date(meeting.date).toLocaleDateString() + '</div>' + (meeting.aiSummary ? '<div class="section"><h2>Summary</h2><p>' + meeting.aiSummary.summary + '</p></div><div class="section"><h2>Key Points</h2><ul>' + meeting.aiSummary.keyPoints?.map(p => '<li>' + p + '</li>').join('') + '</ul></div><div class="section"><h2>Action Items</h2><ul>' + meeting.aiSummary.actionItems?.map(a => '<li class="action">✓ ' + a + '</li>').join('') + '</ul></div>' : '<p>No AI summary.</p>') + '</body></html>';
+    try { const { uri } = await Print.printToFileAsync({ html }); await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Export', UTI: 'com.adobe.pdf' }); } catch (e) { Alert.alert('Error', 'Could not export'); }
   };
 
   const renderItem = ({ item }) => (
@@ -147,76 +146,79 @@ export default function HomeScreen() {
       <FlatList data={filtered} renderItem={renderItem} keyExtractor={i => i.id} numColumns={2} columnWrapperStyle={styles.row} contentContainerStyle={styles.list} ListEmptyComponent={<View style={styles.empty}><Text style={styles.emptyIcon}>🎙️</Text><Text style={styles.emptyText}>No meetings</Text></View>} />
       <TouchableOpacity style={styles.fab} onPress={() => setShowRecord(true)}><Text style={styles.fabIcon}>+</Text></TouchableOpacity>
 
-      <Modal visible={showRecord} transparent animationType="slide">
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
-          <ScrollView keyboardShouldPersistTaps="handled"><View style={styles.modal}>
-            <View style={styles.modalHeader}><Text style={styles.modalTitle}>NEW RECORDING</Text><TouchableOpacity onPress={() => { setShowRecord(false); if (timer) clearInterval(timer); setIsRecording(false); Keyboard.dismiss(); }}><Text style={styles.modalClose}>X</Text></TouchableOpacity></View>
-            <TextInput style={styles.titleInput} placeholder="Meeting title..." value={title} onChangeText={setTitle} />
-            <View style={styles.folderSelect}>{FOLDERS.slice(1).map(f => <TouchableOpacity key={f} style={[styles.chip, recFolder === f && styles.chipActive]} onPress={() => setRecFolder(f)}><Text style={[styles.chipText, recFolder === f && styles.chipTextActive]}>{f}</Text></TouchableOpacity>)}</View>
-            <Text style={styles.speakerLabel}>Tag Speakers (optional)</Text>
-            <View style={styles.speakerInputRow}><TextInput style={styles.speakerInput} placeholder="Enter name..." value={speakerInput} onChangeText={setSpeakerInput} onSubmitEditing={addSpeaker} /><TouchableOpacity style={styles.addSpeakerBtn} onPress={addSpeaker}><Text style={styles.addSpeakerText}>ADD</Text></TouchableOpacity></View>
-            {speakers.length > 0 && <View style={styles.speakerTags}>{speakers.map((s, i) => <TouchableOpacity key={i} style={styles.speakerTag} onPress={() => removeSpeaker(s)}><Text style={styles.speakerTagText}>{s} ×</Text></TouchableOpacity>)}</View>}
-            <View style={styles.recArea}>
-              <TouchableOpacity style={[styles.recBtn, isRecording && styles.recBtnActive]} onPress={toggleRecording}>
-                <View style={[styles.recBtnInner, isRecording && styles.recBtnInnerActive]}>
-                  <Text style={styles.recIcon}>{isRecording ? '⏹ STOP' : '🎤 START'}</Text>
-                </View>
-              </TouchableOpacity>
-              <Text style={styles.recTime}>{isRecording ? 'Recording ' + formatTime(duration) : 'Tap to start recording'}</Text>
-              {isRecording && <Text style={styles.recHint}>Tap again to stop</Text>}
-            </View>
-          </View></ScrollView>
-        </KeyboardAvoidingView>
+      <Modal visible={showRecord} transparent animationType="slide" onRequestClose={closeModals}>
+        <TouchableWithoutFeedback onPress={closeModals}>
+          <View style={styles.modalOverlay}>
+            <TouchableWithoutFeedback>
+              <View style={styles.modalContent}>
+                <View style={styles.modalHeader}><Text style={styles.modalTitle}>NEW RECORDING</Text><TouchableOpacity onPress={closeModals}><Text style={styles.modalClose}>X</Text></TouchableOpacity></View>
+                <ScrollView showsVerticalScrollIndicator={false}>
+                  <TextInput style={styles.titleInput} placeholder="Meeting title..." value={title} onChangeText={setTitle} />
+                  <View style={styles.folderSelect}>{FOLDERS.slice(1).map(f => <TouchableOpacity key={f} style={[styles.chip, recFolder === f && styles.chipActive]} onPress={() => setRecFolder(f)}><Text style={[styles.chipText, recFolder === f && styles.chipTextActive]}>{f}</Text></TouchableOpacity>)}</View>
+                  <Text style={styles.speakerLabel}>Tag Speakers</Text>
+                  <View style={styles.speakerInputRow}><TextInput style={styles.speakerInput} placeholder="Enter name..." value={speakerInput} onChangeText={setSpeakerInput} onSubmitEditing={addSpeaker} /><TouchableOpacity style={styles.addSpeakerBtn} onPress={addSpeaker}><Text style={styles.addSpeakerText}>ADD</Text></TouchableOpacity></View>
+                  {speakers.length > 0 && <View style={styles.speakerTags}>{speakers.map((s, i) => <TouchableOpacity key={i} style={styles.speakerTag} onPress={() => removeSpeaker(s)}><Text style={styles.speakerTagText}>{s} ×</Text></TouchableOpacity>)}</View>}
+                  <View style={styles.recArea}>
+                    <TouchableOpacity style={[styles.recBtn, isRecording && styles.recBtnActive]} onPress={toggleRecording}>
+                      <View style={[styles.recBtnInner, isRecording && styles.recBtnInnerActive]}><Text style={styles.recIcon}>{isRecording ? '⏹ STOP' : '🎤 START'}</Text></View>
+                    </TouchableOpacity>
+                    <Text style={styles.recTime}>{isRecording ? 'Recording ' + formatTime(duration) : 'Tap to start'}</Text>
+                  </View>
+                </ScrollView>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
       </Modal>
 
-      <Modal visible={showSettings} transparent animationType="slide">
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
-          <ScrollView keyboardShouldPersistTaps="handled"><View style={styles.modal}>
-            <View style={styles.modalHeader}><Text style={styles.modalTitle}>API SETTINGS</Text><TouchableOpacity onPress={() => { setShowSettings(false); Keyboard.dismiss(); }}><Text style={styles.modalClose}>X</Text></TouchableOpacity></View>
-            <Text style={styles.apiLabel}>OpenAI API Key *Required for AI</Text>
-            <TextInput style={styles.apiInput} placeholder="sk-..." secureTextEntry value={apiKey} onChangeText={saveApiKey} />
-            <Text style={styles.apiHint}>Get key from platform.openai.com/api-keys</Text>
-            {!hasApiKey(apiKey) && apiKey.length > 0 && <View style={styles.apiError}><Text style={styles.apiErrorText}>Invalid. Must start with "sk-"</Text></View>}
-            {hasApiKey(apiKey) && <View style={styles.apiSuccess}><Text style={styles.apiSuccessText}>✓ API Key configured</Text></View>}
-            <TouchableOpacity style={styles.saveBtn} onPress={() => { setShowSettings(false); Keyboard.dismiss(); }}><Text style={styles.saveBtnText}>{hasApiKey(apiKey) ? 'SAVE' : 'CLOSE'}</Text></TouchableOpacity>
-            <TouchableOpacity style={styles.linkBtn} onPress={() => Linking.openURL('https://platform.openai.com/api-keys')}><Text style={styles.linkBtnText}>Get API Key →</Text></TouchableOpacity>
-          </View></ScrollView>
-        </KeyboardAvoidingView>
+      <Modal visible={showSettings} transparent animationType="slide" onRequestClose={closeModals}>
+        <TouchableWithoutFeedback onPress={closeModals}>
+          <View style={styles.modalOverlay}>
+            <TouchableWithoutFeedback>
+              <View style={styles.modalContent}>
+                <View style={styles.modalHeader}><Text style={styles.modalTitle}>API SETTINGS</Text><TouchableOpacity onPress={closeModals}><Text style={styles.modalClose}>X</Text></TouchableOpacity></View>
+                <ScrollView showsVerticalScrollIndicator={false}>
+                  <Text style={styles.apiLabel}>OpenAI API Key</Text>
+                  <TextInput style={styles.apiInput} placeholder="sk-..." secureTextEntry value={apiKey} onChangeText={saveApiKey} />
+                  <Text style={styles.apiHint}>Get key from platform.openai.com/api-keys</Text>
+                  {!hasApiKey(apiKey) && apiKey.length > 0 && <View style={styles.apiError}><Text style={styles.apiErrorText}>Invalid format</Text></View>}
+                  {hasApiKey(apiKey) && <View style={styles.apiSuccess}><Text style={styles.apiSuccessText}>✓ API Key configured</Text></View>}
+                  <TouchableOpacity style={styles.saveBtn} onPress={closeModals}><Text style={styles.saveBtnText}>{hasApiKey(apiKey) ? 'SAVE' : 'CLOSE'}</Text></TouchableOpacity>
+                  <TouchableOpacity style={styles.linkBtn} onPress={() => Linking.openURL('https://platform.openai.com/api-keys')}><Text style={styles.linkBtnText}>Get API Key →</Text></TouchableOpacity>
+                </ScrollView>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
       </Modal>
 
-      <Modal visible={showTranscriptInput} transparent animationType="slide">
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
-          <ScrollView keyboardShouldPersistTaps="handled"><View style={styles.modal}>
-            <View style={styles.modalHeader}><Text style={styles.modalTitle}>ENTER TRANSCRIPT</Text><TouchableOpacity onPress={() => { setShowTranscriptInput(false); setManualTranscript(''); Keyboard.dismiss(); }}><Text style={styles.modalClose}>X</Text></TouchableOpacity></View>
-            <Text style={styles.apiHint}>Type or paste the meeting transcript, then generate AI summary.</Text>
-            <TextInput style={styles.transcriptInput} placeholder="Paste or type transcript here..." value={manualTranscript} onChangeText={setManualTranscript} multiline numberOfLines={8} textAlignVertical="top" />
-            <TouchableOpacity style={styles.saveBtn} onPress={handleManualSummary} disabled={processing}>
-              {processing ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveBtnText}>GENERATE SUMMARY</Text>}
-            </TouchableOpacity>
-          </View></ScrollView>
-        </KeyboardAvoidingView>
+      <Modal visible={showTranscriptInput} transparent animationType="slide" onRequestClose={closeModals}>
+        <TouchableWithoutFeedback onPress={closeModals}>
+          <View style={styles.modalOverlay}>
+            <TouchableWithoutFeedback>
+              <View style={styles.modalContent}>
+                <View style={styles.modalHeader}><Text style={styles.modalTitle}>ENTER TRANSCRIPT</Text><TouchableOpacity onPress={closeModals}><Text style={styles.modalClose}>X</Text></TouchableOpacity></View>
+                <Text style={styles.apiHint}>Paste transcript, then generate AI summary.</Text>
+                <TextInput style={styles.transcriptInput} placeholder="Paste transcript here..." value={manualTranscript} onChangeText={setManualTranscript} multiline numberOfLines={6} textAlignVertical="top" />
+                <TouchableOpacity style={styles.saveBtn} onPress={handleManualSummary} disabled={processing}>
+                  {processing ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveBtnText}>GENERATE SUMMARY</Text>}
+                </TouchableOpacity>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
       </Modal>
 
-      <Modal visible={!!selected} transparent animationType="slide">
+      <Modal visible={!!selected} transparent animationType="slide" onRequestClose={() => setSelected(null)}>
         <View style={styles.detailOverlay}><View style={styles.detail}>
           <View style={styles.detailHeader}><TouchableOpacity onPress={() => setSelected(null)}><Text style={styles.backBtn}>← BACK</Text></TouchableOpacity><View style={styles.detailActions}><TouchableOpacity onPress={() => exportAsPDF(selected)}><Text style={styles.actionBtn}>PDF</Text></TouchableOpacity><TouchableOpacity onPress={() => Share.share({ message: exportAsText(selected) })}><Text style={styles.actionBtn}>SHARE</Text></TouchableOpacity><TouchableOpacity onPress={() => { Clipboard.setString(exportAsText(selected)); Alert.alert('Copied', 'Meeting copied!'); }}><Text style={styles.actionBtn}>COPY</Text></TouchableOpacity><TouchableOpacity onPress={() => { setMeetings(meetings.filter(m => m.id !== selected?.id)); setSelected(null); }}><Text style={[styles.actionBtn, {color: COLORS.error}]}>DEL</Text></TouchableOpacity></View></View>
           <ScrollView style={styles.detailContent}>
             <Text style={styles.detailTitle}>{selected?.title}</Text>
             <Text style={styles.detailMeta}>{selected?.duration} • {selected?.folder} • {new Date(selected?.date).toLocaleDateString()}</Text>
             {selected?.speakers?.length > 0 && <View style={styles.speakersBox}><Text style={styles.speakersLabel}>Speakers</Text><View style={styles.speakersRow}>{selected.speakers.map((s, i) => <Text key={i} style={styles.speakerBadge}>{s}</Text>)}</View></View>}
-            {!selected?.aiSummary && (
-              <View style={styles.optionsBox}>
-                <Text style={styles.optionsTitle}>Generate AI Summary</Text>
-                <TouchableOpacity style={styles.processBtn} onPress={handleProcess}><Text style={styles.processBtnText}>FROM AUDIO (Requires API)</Text></TouchableOpacity>
-                <TouchableOpacity style={styles.manualBtn} onPress={() => setShowTranscriptInput(true)}><Text style={styles.manualBtnText}>FROM TRANSCRIPT (Manual)</Text></TouchableOpacity>
-              </View>
-            )}
-            {processing && <View style={styles.processingBox}><ActivityIndicator size="small" color={COLORS.accent} /><Text style={styles.processingText}>{processingStatus === 'transcribing' ? 'Transcribing...' : processingStatus === 'summarizing' ? 'Generating summary...' : 'Processing...'}</Text></View>}
-            {selected?.aiSummary && (<>
-              <View style={styles.section}><Text style={styles.sectionTitle}>SUMMARY</Text><Text style={styles.sectionText}>{selected.aiSummary.summary}</Text></View>
-              <View style={styles.section}><Text style={styles.sectionTitle}>KEY POINTS</Text>{selected.aiSummary.keyPoints?.map((p, i) => <View key={i} style={styles.listItem}><Text style={styles.bullet}>•</Text><Text style={styles.listText}>{p}</Text></View>)}</View>
-              <View style={styles.section}><Text style={styles.sectionTitle}>ACTION ITEMS</Text>{selected.aiSummary.actionItems?.map((a, i) => <View key={i} style={styles.listItem}><Text style={styles.bulletSuccess}>✓</Text><Text style={styles.listText}>{a}</Text></View>)}</View>
-            </>)}
+            {!selected?.aiSummary && (<View style={styles.optionsBox}><Text style={styles.optionsTitle}>Generate AI Summary</Text><TouchableOpacity style={styles.processBtn} onPress={handleProcess}><Text style={styles.processBtnText}>FROM AUDIO</Text></TouchableOpacity><TouchableOpacity style={styles.manualBtn} onPress={() => setShowTranscriptInput(true)}><Text style={styles.manualBtnText}>FROM TRANSCRIPT</Text></TouchableOpacity></View>)}
+            {processing && <View style={styles.processingBox}><ActivityIndicator size="small" color={COLORS.accent} /><Text style={styles.processingText}>Processing...</Text></View>}
+            {selected?.aiSummary && (<><View style={styles.section}><Text style={styles.sectionTitle}>SUMMARY</Text><Text style={styles.sectionText}>{selected.aiSummary.summary}</Text></View><View style={styles.section}><Text style={styles.sectionTitle}>KEY POINTS</Text>{selected.aiSummary.keyPoints?.map((p, i) => <View key={i} style={styles.listItem}><Text style={styles.bullet}>•</Text><Text style={styles.listText}>{p}</Text></View>)}</View><View style={styles.section}><Text style={styles.sectionTitle}>ACTION ITEMS</Text>{selected.aiSummary.actionItems?.map((a, i) => <View key={i} style={styles.listItem}><Text style={styles.bulletSuccess}>✓</Text><Text style={styles.listText}>{a}</Text></View>)}</View></>)}
           </ScrollView>
         </View></View>
       </Modal>
@@ -252,8 +254,8 @@ const styles = StyleSheet.create({
   fab: { position: 'absolute', bottom: 30, right: 30, width: 60, height: 60, borderRadius: 30, backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 8 },
   fabIcon: { fontSize: 28, color: COLORS.card },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  modal: { backgroundColor: COLORS.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, maxHeight: '90%' },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20 },
+  modalContent: { backgroundColor: COLORS.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, maxHeight: '85%' },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
   modalTitle: { fontSize: 16, fontWeight: '700', letterSpacing: 1 },
   modalClose: { fontSize: 20, color: COLORS.textSecondary },
   titleInput: { backgroundColor: COLORS.background, padding: 16, borderRadius: 12, marginBottom: 16, fontSize: 16 },
@@ -277,7 +279,6 @@ const styles = StyleSheet.create({
   recBtnInnerActive: { backgroundColor: COLORS.card },
   recIcon: { fontSize: 16, fontWeight: '700', color: COLORS.card },
   recTime: { fontSize: 14, color: COLORS.textSecondary },
-  recHint: { fontSize: 12, color: COLORS.error, marginTop: 8 },
   apiLabel: { fontSize: 14, fontWeight: '600', marginBottom: 8, marginTop: 16 },
   apiInput: { backgroundColor: COLORS.background, padding: 14, borderRadius: 12, fontSize: 14 },
   apiHint: { fontSize: 12, color: COLORS.textSecondary, marginTop: 6 },
@@ -289,7 +290,7 @@ const styles = StyleSheet.create({
   saveBtnText: { color: COLORS.card, fontWeight: '700' },
   linkBtn: { marginTop: 16, alignItems: 'center' },
   linkBtnText: { color: COLORS.accent, fontSize: 14 },
-  transcriptInput: { backgroundColor: COLORS.background, padding: 16, borderRadius: 12, fontSize: 14, marginTop: 16, minHeight: 150, textAlignVertical: 'top' },
+  transcriptInput: { backgroundColor: COLORS.background, padding: 16, borderRadius: 12, fontSize: 14, marginTop: 16, minHeight: 120, textAlignVertical: 'top' },
   detailOverlay: { flex: 1, backgroundColor: COLORS.background },
   detail: { flex: 1, backgroundColor: COLORS.background },
   detailHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, paddingTop: 50, backgroundColor: COLORS.card, borderBottomWidth: 1, borderBottomColor: COLORS.border },
