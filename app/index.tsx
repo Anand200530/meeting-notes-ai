@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, TextInput, FlatList, Modal, Alert, ActivityIndicator, ScrollView, Share, SafeAreaView, StatusBar, Clipboard, Linking, Keyboard, TouchableWithoutFeedback } from 'react-native';
+import { StyleSheet, Text, View, TouchableOpacity, TextInput, FlatList, Modal, Alert, ActivityIndicator, ScrollView, Share, SafeAreaView, StatusBar, Clipboard, Linking, Keyboard, TouchableWithoutFeedback, Platform, KeyboardAvoidingView } from 'react-native';
 import { Audio } from 'expo-av';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Print from 'expo-print';
@@ -103,7 +103,7 @@ export default function HomeScreen() {
 
   const handleProcess = async () => {
     if (!selected) return;
-    if (!hasApiKey(apiKey)) { Alert.alert('No API Key', 'Add API key or enter transcript manually', [{ text: 'Add API Key', onPress: () => setShowSettings(true) }, { text: 'Enter Transcript', onPress: () => setShowTranscriptInput(true) }, { text: 'Cancel', style: 'cancel' }]); return; }
+    if (!hasApiKey(apiKey)) { Alert.alert('No API Key', 'Add API key or enter transcript', [{ text: 'Add API Key', onPress: () => setShowSettings(true) }, { text: 'Transcript', onPress: () => setShowTranscriptInput(true) }, { text: 'Cancel', style: 'cancel' }]); return; }
     if (!selected.hasAudio) { Alert.alert('No Recording', 'Record a meeting first.'); return; }
     setProcessing(true);
     try {
@@ -111,7 +111,7 @@ export default function HomeScreen() {
       setMeetings(meetings.map(m => m.id === selected.id ? processed : m));
       setSelected(processed);
       Alert.alert('Success', 'AI summary generated!');
-    } catch (e) { Alert.alert('Error', 'Processing failed: ' + e.message); }
+    } catch (e) { Alert.alert('Error', 'Failed: ' + e.message); }
     finally { setProcessing(false); setProcessingStatus(''); }
   };
 
@@ -146,69 +146,70 @@ export default function HomeScreen() {
       <FlatList data={filtered} renderItem={renderItem} keyExtractor={i => i.id} numColumns={2} columnWrapperStyle={styles.row} contentContainerStyle={styles.list} ListEmptyComponent={<View style={styles.empty}><Text style={styles.emptyIcon}>🎙️</Text><Text style={styles.emptyText}>No meetings</Text></View>} />
       <TouchableOpacity style={styles.fab} onPress={() => setShowRecord(true)}><Text style={styles.fabIcon}>+</Text></TouchableOpacity>
 
+      {/* Recording Modal */}
       <Modal visible={showRecord} transparent animationType="slide" onRequestClose={closeModals}>
         <TouchableWithoutFeedback onPress={closeModals}>
-          <View style={styles.modalOverlay}>
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
             <TouchableWithoutFeedback>
               <View style={styles.modalContent}>
                 <View style={styles.modalHeader}><Text style={styles.modalTitle}>NEW RECORDING</Text><TouchableOpacity onPress={closeModals}><Text style={styles.modalClose}>X</Text></TouchableOpacity></View>
-                <ScrollView showsVerticalScrollIndicator={false}>
+                <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
                   <TextInput style={styles.titleInput} placeholder="Meeting title..." value={title} onChangeText={setTitle} />
                   <View style={styles.folderSelect}>{FOLDERS.slice(1).map(f => <TouchableOpacity key={f} style={[styles.chip, recFolder === f && styles.chipActive]} onPress={() => setRecFolder(f)}><Text style={[styles.chipText, recFolder === f && styles.chipTextActive]}>{f}</Text></TouchableOpacity>)}</View>
                   <Text style={styles.speakerLabel}>Tag Speakers</Text>
                   <View style={styles.speakerInputRow}><TextInput style={styles.speakerInput} placeholder="Enter name..." value={speakerInput} onChangeText={setSpeakerInput} onSubmitEditing={addSpeaker} /><TouchableOpacity style={styles.addSpeakerBtn} onPress={addSpeaker}><Text style={styles.addSpeakerText}>ADD</Text></TouchableOpacity></View>
                   {speakers.length > 0 && <View style={styles.speakerTags}>{speakers.map((s, i) => <TouchableOpacity key={i} style={styles.speakerTag} onPress={() => removeSpeaker(s)}><Text style={styles.speakerTagText}>{s} ×</Text></TouchableOpacity>)}</View>}
-                  <View style={styles.recArea}>
-                    <TouchableOpacity style={[styles.recBtn, isRecording && styles.recBtnActive]} onPress={toggleRecording}>
-                      <View style={[styles.recBtnInner, isRecording && styles.recBtnInnerActive]}><Text style={styles.recIcon}>{isRecording ? '⏹ STOP' : '🎤 START'}</Text></View>
-                    </TouchableOpacity>
-                    <Text style={styles.recTime}>{isRecording ? 'Recording ' + formatTime(duration) : 'Tap to start'}</Text>
-                  </View>
+                  <View style={styles.recArea}><TouchableOpacity style={[styles.recBtn, isRecording && styles.recBtnActive]} onPress={toggleRecording}><View style={[styles.recBtnInner, isRecording && styles.recBtnInnerActive]}><Text style={styles.recIcon}>{isRecording ? '⏹ STOP' : '🎤 START'}</Text></View></TouchableOpacity><Text style={styles.recTime}>{isRecording ? 'Recording ' + formatTime(duration) : 'Tap to start'}</Text></View>
                 </ScrollView>
               </View>
             </TouchableWithoutFeedback>
-          </View>
+          </KeyboardAvoidingView>
         </TouchableWithoutFeedback>
       </Modal>
 
+      {/* Settings Modal */}
       <Modal visible={showSettings} transparent animationType="slide" onRequestClose={closeModals}>
         <TouchableWithoutFeedback onPress={closeModals}>
-          <View style={styles.modalOverlay}>
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
             <TouchableWithoutFeedback>
               <View style={styles.modalContent}>
                 <View style={styles.modalHeader}><Text style={styles.modalTitle}>API SETTINGS</Text><TouchableOpacity onPress={closeModals}><Text style={styles.modalClose}>X</Text></TouchableOpacity></View>
-                <ScrollView showsVerticalScrollIndicator={false}>
+                <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
                   <Text style={styles.apiLabel}>OpenAI API Key</Text>
                   <TextInput style={styles.apiInput} placeholder="sk-..." secureTextEntry value={apiKey} onChangeText={saveApiKey} />
                   <Text style={styles.apiHint}>Get key from platform.openai.com/api-keys</Text>
                   {!hasApiKey(apiKey) && apiKey.length > 0 && <View style={styles.apiError}><Text style={styles.apiErrorText}>Invalid format</Text></View>}
                   {hasApiKey(apiKey) && <View style={styles.apiSuccess}><Text style={styles.apiSuccessText}>✓ API Key configured</Text></View>}
-                  <TouchableOpacity style={styles.saveBtn} onPress={closeModals}><Text style={styles.saveBtnText}>{hasApiKey(apiKey) ? 'SAVE' : 'CLOSE'}</Text></TouchableOpacity>
+                  <TouchableOpacity style={styles.saveBtn} onPress={closeModals}><Text style={styles.saveBtnText}>{hasApiKey(apiKey) ? 'DONE' : 'CLOSE'}</Text></TouchableOpacity>
                   <TouchableOpacity style={styles.linkBtn} onPress={() => Linking.openURL('https://platform.openai.com/api-keys')}><Text style={styles.linkBtnText}>Get API Key →</Text></TouchableOpacity>
                 </ScrollView>
               </View>
             </TouchableWithoutFeedback>
-          </View>
+          </KeyboardAvoidingView>
         </TouchableWithoutFeedback>
       </Modal>
 
+      {/* Transcript Modal */}
       <Modal visible={showTranscriptInput} transparent animationType="slide" onRequestClose={closeModals}>
         <TouchableWithoutFeedback onPress={closeModals}>
-          <View style={styles.modalOverlay}>
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
             <TouchableWithoutFeedback>
               <View style={styles.modalContent}>
                 <View style={styles.modalHeader}><Text style={styles.modalTitle}>ENTER TRANSCRIPT</Text><TouchableOpacity onPress={closeModals}><Text style={styles.modalClose}>X</Text></TouchableOpacity></View>
-                <Text style={styles.apiHint}>Paste transcript, then generate AI summary.</Text>
-                <TextInput style={styles.transcriptInput} placeholder="Paste transcript here..." value={manualTranscript} onChangeText={setManualTranscript} multiline numberOfLines={6} textAlignVertical="top" />
-                <TouchableOpacity style={styles.saveBtn} onPress={handleManualSummary} disabled={processing}>
-                  {processing ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveBtnText}>GENERATE SUMMARY</Text>}
-                </TouchableOpacity>
+                <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+                  <Text style={styles.apiHint}>Paste transcript, then generate AI summary.</Text>
+                  <TextInput style={styles.transcriptInput} placeholder="Paste transcript here..." value={manualTranscript} onChangeText={setManualTranscript} multiline numberOfLines={6} textAlignVertical="top" />
+                  <TouchableOpacity style={styles.saveBtn} onPress={handleManualSummary} disabled={processing}>
+                    {processing ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveBtnText}>GENERATE SUMMARY</Text>}
+                  </TouchableOpacity>
+                </ScrollView>
               </View>
             </TouchableWithoutFeedback>
-          </View>
+          </KeyboardAvoidingView>
         </TouchableWithoutFeedback>
       </Modal>
 
+      {/* Detail Modal */}
       <Modal visible={!!selected} transparent animationType="slide" onRequestClose={() => setSelected(null)}>
         <View style={styles.detailOverlay}><View style={styles.detail}>
           <View style={styles.detailHeader}><TouchableOpacity onPress={() => setSelected(null)}><Text style={styles.backBtn}>← BACK</Text></TouchableOpacity><View style={styles.detailActions}><TouchableOpacity onPress={() => exportAsPDF(selected)}><Text style={styles.actionBtn}>PDF</Text></TouchableOpacity><TouchableOpacity onPress={() => Share.share({ message: exportAsText(selected) })}><Text style={styles.actionBtn}>SHARE</Text></TouchableOpacity><TouchableOpacity onPress={() => { Clipboard.setString(exportAsText(selected)); Alert.alert('Copied', 'Meeting copied!'); }}><Text style={styles.actionBtn}>COPY</Text></TouchableOpacity><TouchableOpacity onPress={() => { setMeetings(meetings.filter(m => m.id !== selected?.id)); setSelected(null); }}><Text style={[styles.actionBtn, {color: COLORS.error}]}>DEL</Text></TouchableOpacity></View></View>
@@ -254,7 +255,7 @@ const styles = StyleSheet.create({
   fab: { position: 'absolute', bottom: 30, right: 30, width: 60, height: 60, borderRadius: 30, backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 8 },
   fabIcon: { fontSize: 28, color: COLORS.card },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  modalContent: { backgroundColor: COLORS.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, maxHeight: '85%' },
+  modalContent: { backgroundColor: COLORS.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, maxHeight: '90%' },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
   modalTitle: { fontSize: 16, fontWeight: '700', letterSpacing: 1 },
   modalClose: { fontSize: 20, color: COLORS.textSecondary },
