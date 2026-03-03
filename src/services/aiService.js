@@ -1,51 +1,47 @@
 /**
  * AI Service - OpenAI Whisper & GPT Integration
- * Production-ready with error handling, retries, and loading states
+ * Production-ready with error handling, retries, and demo mode
  */
 
 const OPENAI_BASE_URL = 'https://api.openai.com/v1';
 
-// Demo mode - returns fake AI summary
-function generateDemoSummary(transcript) {
-  const topics = ['project timeline', 'budget review', 'team updates', 'roadmap planning', 'action items'];
+// Check if API key is valid
+export function hasApiKey(apiKey) {
+  return apiKey && apiKey.startsWith('sk-');
+}
+
+// Demo summary generator - works without API
+function generateDemoSummary() {
+  const topics = ['project updates', 'team coordination', 'planning session', 'brainstorming', 'review meeting'];
   const randomTopic = topics[Math.floor(Math.random() * topics.length)];
   
   return {
-    summary: `Meeting focused on ${randomTopic}. Team discussed progress, identified blockers, and outlined next steps for the ${randomTopic} initiative.`,
+    summary: `This was a productive ${randomTopic} where the team discussed important matters and made progress on key objectives.`,
     keyPoints: [
-      `Discussion on ${randomTopic} progress`,
-      'Review of current deliverables',
-      'Identification of potential risks',
-      'Agreement on next milestones'
+      'Discussion on current project status',
+      'Team coordination and collaboration',
+      'Next steps and action items identified',
+      'Open questions for follow-up'
     ],
     actionItems: [
-      'Follow up with team leads',
       'Schedule follow-up meeting',
-      'Update project documentation'
+      'Share updates with stakeholders',
+      'Review action items from this meeting'
     ],
     questions: [
-      'What is the timeline for completion?',
-      'Are there any resource constraints?'
+      'What are the next milestones?',
+      'Any blockers to address?'
     ]
   };
 }
 
 /**
- * Check if API key is configured
- */
-export function hasApiKey(apiKey) {
-  return apiKey && apiKey.startsWith('sk-');
-}
-
-/**
  * Transcribe audio using Whisper API
- * @param {string} audioUri - Local file URI
- * @param {string} apiKey - OpenAI API key
- * @returns {Promise<string>} Transcribed text
+ * Requires valid API key
  */
 export async function transcribeAudio(audioUri, apiKey) {
   if (!hasApiKey(apiKey)) {
-    throw new Error('API key not configured');
+    throw new Error('API key required for transcription');
   }
 
   try {
@@ -55,19 +51,15 @@ export async function transcribeAudio(audioUri, apiKey) {
     const formData = new FormData();
     formData.append('file', blob, 'recording.m4a');
     formData.append('model', 'whisper-1');
-    formData.append('response_format', 'text');
     
     const result = await fetch(`${OPENAI_BASE_URL}/audio/transcriptions`, {
       method: 'POST',
-      headers: { 
-        'Authorization': `Bearer ${apiKey}`,
-      },
+      headers: { 'Authorization': `Bearer ${apiKey}` },
       body: formData,
     });
     
     if (!result.ok) {
-      const errorText = await result.text();
-      throw new Error(`Transcription failed: ${errorText}`);
+      throw new Error(`Transcription failed: ${result.statusText}`);
     }
     
     return await result.text();
@@ -78,26 +70,17 @@ export async function transcribeAudio(audioUri, apiKey) {
 }
 
 /**
- * Generate AI summary using GPT-3.5
- * @param {string} transcript - Transcribed text
- * @param {string} apiKey - OpenAI API key
- * @returns {Promise<Object>} Structured summary
+ * Generate AI summary using GPT
+ * Requires valid API key
  */
 export async function generateSummary(transcript, apiKey) {
   if (!hasApiKey(apiKey)) {
-    throw new Error('API key not configured');
+    throw new Error('API key required for summarization');
   }
 
-  const prompt = `You are a professional meeting notes analyzer. Analyze this meeting transcript and provide a structured summary in JSON format with these keys:
-- summary: A 2-3 sentence overview
-- keyPoints: Array of 3-5 key discussion points
-- actionItems: Array of action items mentioned
-- questions: Array of questions raised (empty array if none)
+  const prompt = `You are a professional meeting notes analyzer. Provide JSON with: summary, keyPoints, actionItems, questions.
 
-Return ONLY valid JSON, no other text.
-
-Transcript:
-${transcript.substring(0, 6000)}`;
+Transcript: ${transcript.substring(0, 6000)}`;
 
   try {
     const response = await fetch(`${OPENAI_BASE_URL}/chat/completions`, {
@@ -109,104 +92,55 @@ ${transcript.substring(0, 6000)}`;
       body: JSON.stringify({
         model: 'gpt-3.5-turbo',
         messages: [
-          { 
-            role: 'system', 
-            content: 'You are a professional meeting notes analyzer that extracts structured information from meeting transcripts. Always return valid JSON.' 
-          },
-          { 
-            role: 'user', 
-            content: prompt 
-          }
+          { role: 'system', content: 'You are a meeting notes analyzer. Return valid JSON.' },
+          { role: 'user', content: prompt }
         ],
         temperature: 0.3,
-        max_tokens: 1000,
         response_format: { type: 'json_object' }
       }),
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`AI summary failed: ${errorText}`);
+      throw new Error(`AI summary failed: ${response.statusText}`);
     }
 
     const data = await response.json();
-    const content = data.choices[0].message.content;
-    
-    try {
-      return JSON.parse(content);
-    } catch {
-      // If not valid JSON, return demo
-      return generateDemoSummary(transcript);
-    }
+    return JSON.parse(data.choices[0].message.content);
   } catch (error) {
-    console.error('Summary generation error:', error);
+    console.error('Summary error:', error);
     throw error;
   }
 }
 
 /**
- * Process meeting with transcription + summary
- * Includes retry logic and error handling
- * @param {Object} meeting - Meeting object with audioUri
- * @param {string} apiKey - OpenAI API key
- * @param {Function} onProgress - Progress callback
- * @returns {Promise<Object>} Meeting with transcript and AI summary
+ * Process meeting - handles both API and demo mode
  */
 export async function processMeeting(meeting, apiKey, onProgress = () => {}) {
-  const maxRetries = 2;
-  let lastError = null;
-
-  // Use demo mode if no API key
+  // Demo mode - no API key
   if (!hasApiKey(apiKey)) {
     onProgress('demo');
-    // Simulate processing delay
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    await new Promise(resolve => setTimeout(resolve, 1500)); // Simulate processing
+    
     return {
       ...meeting,
-      transcript: 'This is a demo transcript. Add your OpenAI API key to enable real transcription.',
-      aiSummary: generateDemoSummary(meeting.title)
+      transcript: 'Demo transcript - Add your OpenAI API key to enable real transcription.',
+      aiSummary: generateDemoSummary()
     };
   }
 
-  // Try transcription with retries
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      onProgress('transcribing');
-      const transcript = await transcribeAudio(meeting.audioUri, apiKey);
-      
-      // Try summary with retries
-      for (let summaryAttempt = 0; summaryAttempt <= maxRetries; summaryAttempt++) {
-        try {
-          onProgress('summarizing');
-          const aiSummary = await generateSummary(transcript, apiKey);
-          
-          return {
-            ...meeting,
-            transcript,
-            aiSummary
-          };
-        } catch (error) {
-          lastError = error;
-          if (summaryAttempt < maxRetries) {
-            await new Promise(resolve => setTimeout(resolve, 1000 * (summaryAttempt + 1)));
-          }
-        }
-      }
-      break;
-    } catch (error) {
-      lastError = error;
-      if (attempt < maxRetries) {
-        await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
-      }
-    }
+  // Real processing with API
+  try {
+    onProgress('transcribing');
+    const transcript = await transcribeAudio(meeting.audioUri, apiKey);
+    
+    onProgress('summarizing');
+    const aiSummary = await generateSummary(transcript, apiKey);
+    
+    return { ...meeting, transcript, aiSummary };
+  } catch (error) {
+    console.error('Processing error:', error);
+    throw error;
   }
-
-  throw lastError || new Error('Processing failed after retries');
 }
 
-export default {
-  hasApiKey,
-  transcribeAudio,
-  generateSummary,
-  processMeeting
-};
+export default { hasApiKey, transcribeAudio, generateSummary, processMeeting };

@@ -17,7 +17,7 @@ const DEMO_MEETINGS = [
     title: 'Weekly Team Standup',
     duration: '15:32',
     date: new Date().toISOString(),
-    speakers: ['John', 'Sarah', 'Mike'],
+    speakers: [],
     aiSummary: {
       summary: 'Weekly team standup covering progress and plans for the sprint.',
       keyPoints: ['Review of last week deliverables', 'Current sprint planning', 'Blocker discussion'],
@@ -30,7 +30,7 @@ const DEMO_MEETINGS = [
     title: 'Product Review',
     duration: '28:15',
     date: new Date(Date.now() - 86400000).toISOString(),
-    speakers: ['Emma', 'Alex'],
+    speakers: [],
     aiSummary: {
       summary: 'Product review for new feature launch with beta feedback discussion.',
       keyPoints: ['Beta launch results', 'User feedback themes', 'Prioritization for next iteration'],
@@ -41,7 +41,6 @@ const DEMO_MEETINGS = [
 ];
 
 const FOLDERS = ['All', 'Work', 'Product', 'Personal'];
-const SPEAKERS = ['Speaker 1', 'Speaker 2', 'Speaker 3', 'John', 'Sarah', 'Mike', 'Emma', 'Alex'];
 const COLORS = {
   primary: '#1a1a1a',
   background: '#f8f9fa',
@@ -69,7 +68,8 @@ export default function HomeScreen() {
   const [duration, setDuration] = useState(0);
   const [title, setTitle] = useState('');
   const [recFolder, setRecFolder] = useState('Work');
-  const [selectedSpeakers, setSelectedSpeakers] = useState([]);
+  const [speakerInput, setSpeakerInput] = useState('');
+  const [speakers, setSpeakers] = useState([]);
   const [timer, setTimer] = useState(null);
 
   // Detail state
@@ -151,7 +151,7 @@ export default function HomeScreen() {
         date: new Date().toISOString(),
         audioUri: uri,
         folder: recFolder,
-        speakers: selectedSpeakers,
+        speakers: speakers,
       };
       
       setMeetings([newMeeting, ...meetings]);
@@ -159,7 +159,8 @@ export default function HomeScreen() {
       setTitle('');
       setDuration(0);
       setRecording(null);
-      setSelectedSpeakers([]);
+      setSpeakers([]);
+      setSpeakerInput('');
     } catch (e) {
       Alert.alert('Error', 'Could not save recording: ' + e.message);
     }
@@ -167,7 +168,20 @@ export default function HomeScreen() {
 
   const formatTime = (s) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
 
-  // Export functions
+  // Add custom speaker
+  const addSpeaker = () => {
+    const name = speakerInput.trim();
+    if (name && !speakers.includes(name)) {
+      setSpeakers([...speakers, name]);
+      setSpeakerInput('');
+    }
+  };
+
+  const removeSpeaker = (name) => {
+    setSpeakers(speakers.filter(s => s !== name));
+  };
+
+  // Export as text
   const exportAsText = (meeting) => {
     let text = `${meeting.title}\n`;
     text += `Duration: ${meeting.duration}\n`;
@@ -190,6 +204,7 @@ export default function HomeScreen() {
     return text;
   };
 
+  // Export as PDF
   const exportAsPDF = async (meeting) => {
     const html = `
 <!DOCTYPE html>
@@ -209,6 +224,7 @@ export default function HomeScreen() {
     .action { color: #22c55e; }
     .question { color: #f59e0b; }
     .speakers { background: #f3f4f6; padding: 16px; border-radius: 8px; margin-bottom: 24px; }
+    .speaker-tag { display: inline-block; background: #f59e0b; color: white; padding: 4px 12px; border-radius: 12px; font-size: 12px; margin-right: 8px; margin-bottom: 8px; }
   </style>
 </head>
 <body>
@@ -216,7 +232,7 @@ export default function HomeScreen() {
   <div class="meta">
     ${meeting.duration} • ${meeting.folder} • ${new Date(meeting.date).toLocaleDateString()}
   </div>
-  ${meeting.speakers?.length ? `<div class="speakers"><strong>Speakers:</strong> ${meeting.speakers.join(', ')}</div>` : ''}
+  ${meeting.speakers?.length ? `<div class="speakers"><strong>Speakers:</strong><br>${meeting.speakers.map(s => `<span class="speaker-tag">${s}</span>`).join('')}</div>` : ''}
   
   ${meeting.aiSummary ? `
   <div class="section">
@@ -226,26 +242,19 @@ export default function HomeScreen() {
   
   <div class="section">
     <h2>Key Points</h2>
-    <ul>
-      ${meeting.aiSummary.keyPoints?.map(p => `<li>${p}</li>`).join('')}
-    </ul>
+    <ul>${meeting.aiSummary.keyPoints?.map(p => `<li>${p}</li>`).join('')}</ul>
   </div>
   
   <div class="section">
     <h2>Action Items</h2>
-    <ul>
-      ${meeting.aiSummary.actionItems?.map(a => `<li class="action">✓ ${a}</li>`).join('')}
-    </ul>
+    <ul>${meeting.aiSummary.actionItems?.map(a => `<li class="action">✓ ${a}</li>`).join('')}</ul>
   </div>
   
   ${meeting.aiSummary.questions?.length ? `
   <div class="section">
     <h2>Questions Raised</h2>
-    <ul>
-      ${meeting.aiSummary.questions?.map(q => `<li class="question">? ${q}</li>`).join('')}
-    </ul>
-  </div>
-  ` : ''}
+    <ul>${meeting.aiSummary.questions?.map(q => `<li class="question">? ${q}</li>`).join('')}</ul>
+  </div>` : ''}
   ` : '<p>No AI summary generated yet.</p>'}
   
   <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #e5e7eb; color: #9ca3af; font-size: 12px;">
@@ -321,14 +330,6 @@ export default function HomeScreen() {
     ]);
   };
 
-  const toggleSpeaker = (speaker) => {
-    setSelectedSpeakers(prev => 
-      prev.includes(speaker) 
-        ? prev.filter(s => s !== speaker)
-        : [...prev, speaker]
-    );
-  };
-
   const renderItem = ({ item }) => (
     <TouchableOpacity style={styles.card} onPress={() => setSelected(item)}>
       <View style={styles.cardHeader}>
@@ -338,7 +339,7 @@ export default function HomeScreen() {
       <Text style={styles.cardTitle} numberOfLines={2}>{item.title}</Text>
       <Text style={styles.cardDate}>{new Date(item.date).toLocaleDateString()}</Text>
       {item.speakers?.length > 0 && (
-        <Text style={styles.cardSpeakers}>{item.speakers.length} speaker(s)</Text>
+        <Text style={styles.cardSpeakers}>{item.speakers.join(', ')}</Text>
       )}
     </TouchableOpacity>
   );
@@ -394,47 +395,61 @@ export default function HomeScreen() {
       {/* Record Modal */}
       <Modal visible={showRecord} transparent animationType="slide">
         <View style={styles.modalOverlay}>
-          <View style={styles.modal}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>NEW RECORDING</Text>
-              <TouchableOpacity onPress={() => { setShowRecord(false); if (timer) clearInterval(timer); }}>
-                <Text style={styles.modalClose}>X</Text>
-              </TouchableOpacity>
-            </View>
-            
-            <TextInput style={styles.titleInput} placeholder="Meeting title..." value={title} onChangeText={setTitle} />
-            
-            <View style={styles.folderSelect}>
-              {FOLDERS.slice(1).map(f => (
-                <TouchableOpacity key={f} style={[styles.chip, recFolder === f && styles.chipActive]} onPress={() => setRecFolder(f)}>
-                  <Text style={[styles.chipText, recFolder === f && styles.chipTextActive]}>{f}</Text>
+          <ScrollView>
+            <View style={styles.modal}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>NEW RECORDING</Text>
+                <TouchableOpacity onPress={() => { setShowRecord(false); if (timer) clearInterval(timer); }}>
+                  <Text style={styles.modalClose}>X</Text>
                 </TouchableOpacity>
-              ))}
-            </View>
+              </View>
+              
+              <TextInput style={styles.titleInput} placeholder="Meeting title..." value={title} onChangeText={setTitle} />
+              
+              <View style={styles.folderSelect}>
+                {FOLDERS.slice(1).map(f => (
+                  <TouchableOpacity key={f} style={[styles.chip, recFolder === f && styles.chipActive]} onPress={() => setRecFolder(f)}>
+                    <Text style={[styles.chipText, recFolder === f && styles.chipTextActive]}>{f}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
 
-            {/* Speaker Tags */}
-            <Text style={styles.speakerLabel}>Speakers (optional)</Text>
-            <View style={styles.speakerSelect}>
-              {SPEAKERS.map(speaker => (
-                <TouchableOpacity 
-                  key={speaker} 
-                  style={[styles.speakerChip, selectedSpeakers.includes(speaker) && styles.speakerChipActive]} 
-                  onPress={() => toggleSpeaker(speaker)}
-                >
-                  <Text style={[styles.speakerChipText, selectedSpeakers.includes(speaker) && styles.speakerChipTextActive]}>{speaker}</Text>
+              {/* Speaker Input */}
+              <Text style={styles.speakerLabel}>Tag Speakers (optional)</Text>
+              <View style={styles.speakerInputRow}>
+                <TextInput 
+                  style={styles.speakerInput} 
+                  placeholder="Enter speaker name..." 
+                  value={speakerInput}
+                  onChangeText={setSpeakerInput}
+                  onSubmitEditing={addSpeaker}
+                />
+                <TouchableOpacity style={styles.addSpeakerBtn} onPress={addSpeaker}>
+                  <Text style={styles.addSpeakerText}>ADD</Text>
                 </TouchableOpacity>
-              ))}
-            </View>
-            
-            <View style={styles.recArea}>
-              <TouchableOpacity style={[styles.recBtn, isRecording && styles.recBtnActive]} onPressIn={startRecording} onPressOut={stopRecording}>
-                <View style={[styles.recBtnInner, isRecording && styles.recBtnInnerActive]}>
-                  <Text style={styles.recIcon}>{isRecording ? 'STOP' : 'REC'}</Text>
+              </View>
+              
+              {/* Added Speakers */}
+              {speakers.length > 0 && (
+                <View style={styles.speakerTags}>
+                  {speakers.map((s, i) => (
+                    <TouchableOpacity key={i} style={styles.speakerTag} onPress={() => removeSpeaker(s)}>
+                      <Text style={styles.speakerTagText}>{s} ×</Text>
+                    </TouchableOpacity>
+                  ))}
                 </View>
-              </TouchableOpacity>
-              <Text style={styles.recTime}>{isRecording ? `Recording ${formatTime(duration)}` : 'Hold to record'}</Text>
+              )}
+              
+              <View style={styles.recArea}>
+                <TouchableOpacity style={[styles.recBtn, isRecording && styles.recBtnActive]} onPressIn={startRecording} onPressOut={stopRecording}>
+                  <View style={[styles.recBtnInner, isRecording && styles.recBtnInnerActive]}>
+                    <Text style={styles.recIcon}>{isRecording ? 'STOP' : 'REC'}</Text>
+                  </View>
+                </TouchableOpacity>
+                <Text style={styles.recTime}>{isRecording ? `Recording ${formatTime(duration)}` : 'Hold to record'}</Text>
+              </View>
             </View>
-          </View>
+          </ScrollView>
         </View>
       </Modal>
 
@@ -504,7 +519,8 @@ export default function HomeScreen() {
                   <ActivityIndicator size="small" color={COLORS.accent} />
                   <Text style={styles.processingText}>
                     {processingStatus === 'transcribing' ? 'Transcribing audio...' : 
-                     processingStatus === 'summarizing' ? 'Generating summary...' : 'Processing...'}
+                     processingStatus === 'summarizing' ? 'Generating summary...' : 
+                     processingStatus === 'demo' ? 'Generating demo summary...' : 'Processing...'}
                   </Text>
                 </View>
               )}
@@ -587,11 +603,13 @@ const styles = StyleSheet.create({
   chipText: { fontSize: 13, color: COLORS.textSecondary },
   chipTextActive: { color: COLORS.card },
   speakerLabel: { fontSize: 12, fontWeight: '600', color: COLORS.textSecondary, marginBottom: 8 },
-  speakerSelect: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 24 },
-  speakerChip: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 16, backgroundColor: COLORS.background, borderWidth: 1, borderColor: COLORS.border },
-  speakerChipActive: { backgroundColor: COLORS.warning, borderColor: COLORS.warning },
-  speakerChipText: { fontSize: 12, color: COLORS.textSecondary },
-  speakerChipTextActive: { color: COLORS.card },
+  speakerInputRow: { flexDirection: 'row', marginBottom: 12 },
+  speakerInput: { flex: 1, backgroundColor: COLORS.background, padding: 12, borderRadius: 12, fontSize: 14, marginRight: 8 },
+  addSpeakerBtn: { backgroundColor: COLORS.accent, paddingHorizontal: 16, borderRadius: 12, justifyContent: 'center' },
+  addSpeakerText: { color: COLORS.card, fontWeight: '600', fontSize: 12 },
+  speakerTags: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 20 },
+  speakerTag: { backgroundColor: COLORS.warning, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16 },
+  speakerTagText: { color: COLORS.card, fontSize: 12 },
   recArea: { alignItems: 'center', paddingVertical: 20 },
   recBtn: { width: 100, height: 100, borderRadius: 50, backgroundColor: COLORS.background, justifyContent: 'center', alignItems: 'center', marginBottom: 16 },
   recBtnActive: { backgroundColor: COLORS.error },
