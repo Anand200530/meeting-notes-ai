@@ -38,29 +38,41 @@ export default function HomeScreen() {
   const saveApiKey = async (key) => { setApiKey(key); try { await AsyncStorage.setItem('@settings', JSON.stringify({ openai: key })); } catch {} };
   const filtered = meetings.filter(m => (folder === 'All' || m.folder === folder) && m.title.toLowerCase().includes(search.toLowerCase()));
 
-  const startRecording = async () => {
-    try {
-      const { status } = await Audio.requestPermissionsAsync();
-      if (status !== 'granted') { Alert.alert('Permission Required', 'Please grant microphone permission.'); return; }
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-      const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-      setRecording(recording); setIsRecording(true); setDuration(0);
-      setTimer(setInterval(() => setDuration(d => d + 1), 1000));
-    } catch (e) { Alert.alert('Error', 'Could not start recording'); }
-  };
-
-  const stopRecording = async () => {
-    if (!recording) return;
-    if (timer) clearInterval(timer);
-    setIsRecording(false);
-    try {
-      await recording.stopAndUnloadAsync();
-      const uri = recording.getURI();
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
-      const newMeeting = { id: Date.now().toString(), title: title || 'Meeting ' + (meetings.length + 1), duration: formatTime(duration), date: new Date().toISOString(), audioUri: uri, folder: recFolder, speakers, aiSummary: null, hasAudio: true };
-      setMeetings([newMeeting, ...meetings]);
-      setShowRecord(false); setTitle(''); setDuration(0); setRecording(null); setSpeakers([]); setSpeakerInput('');
-    } catch (e) { Alert.alert('Error', 'Could not save recording'); }
+  // SINGLE TAP - Start or Stop recording
+  const toggleRecording = async () => {
+    if (isRecording) {
+      // Stop recording
+      if (timer) clearInterval(timer);
+      setIsRecording(false);
+      try {
+        await recording.stopAndUnloadAsync();
+        const uri = recording.getURI();
+        await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
+        const newMeeting = { 
+          id: Date.now().toString(), 
+          title: title || 'Meeting ' + (meetings.length + 1), 
+          duration: formatTime(duration), 
+          date: new Date().toISOString(), 
+          audioUri: uri, 
+          folder: recFolder, 
+          speakers, 
+          aiSummary: null, 
+          hasAudio: true 
+        };
+        setMeetings([newMeeting, ...meetings]);
+        setShowRecord(false); setTitle(''); setDuration(0); setRecording(null); setSpeakers([]); setSpeakerInput('');
+      } catch (e) { Alert.alert('Error', 'Could not save recording'); }
+    } else {
+      // Start recording
+      try {
+        const { status } = await Audio.requestPermissionsAsync();
+        if (status !== 'granted') { Alert.alert('Permission Required', 'Please grant microphone permission.'); return; }
+        await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+        const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+        setRecording(recording); setIsRecording(true); setDuration(0);
+        setTimer(setInterval(() => setDuration(d => d + 1), 1000));
+      } catch (e) { Alert.alert('Error', 'Could not start recording'); }
+    }
   };
 
   const formatTime = (s) => Math.floor(s / 60) + ':' + (s % 60).toString().padStart(2, '0');
@@ -70,13 +82,13 @@ export default function HomeScreen() {
   const exportAsText = (m) => {
     let t = m.title + '\nDuration: ' + m.duration + '\nDate: ' + new Date(m.date).toLocaleDateString() + '\nFolder: ' + m.folder + '\n';
     if (m.speakers?.length) t += 'Speakers: ' + m.speakers.join(', ') + '\n\n';
-    if (m.aiSummary) { t += 'SUMMARY:\n' + m.aiSummary.summary + '\n\nKEY POINTS:\n'; m.aiSummary.keyPoints?.forEach(p => t += '• ' + p + '\n'); }
+    if (m.aiSummary) { t += 'SUMMARY:\n' + m.aiSummary.summary + '\n\nKEY POINTS:\n'; m.aiSummary.keyPoints?.forEach(p => t += '• ' + p + '\n'); t += '\nACTION ITEMS:\n'; m.aiSummary.actionItems?.forEach(a => t += '✓ ' + a + '\n'); }
     else t += '\nAI Summary: Add API key in Settings to enable.\n';
     return t;
   };
 
   const exportAsPDF = async (meeting) => {
-    const html = '<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{font-family:-apple-system,sans-serif;padding:40px;max-width:800px;margin:0 auto}h1{color:#1a1a1a;font-size:24px}.meta{color:#6b7280;font-size:14px;margin-bottom:24px}.no-ai{background:#fef3c7;color:#92400e;padding:16px;border-radius:8px;margin-bottom:24px}h2{color:#2563eb;font-size:14px;text-transform:uppercase;letter-spacing:1px;margin:24px 0 12px}p,li{color:#1f2937;line-height:1.6}ul{padding-left:20px}.action{color:#22c55e}.speaker-tag{background:#f59e0b;color:#fff;padding:4px 12px;border-radius:12px;font-size:12px;margin-right:8px}</style></head><body><h1>' + meeting.title + '</h1><div class="meta">' + meeting.duration + ' • ' + meeting.folder + ' • ' + new Date(meeting.date).toLocaleDateString() + '</div>' + (meeting.speakers?.length ? '<div><strong>Speakers:</strong><br>' + meeting.speakers.map(s => '<span class="speaker-tag">' + s + '</span>').join('') + '</div>' : '') + (meeting.aiSummary ? '<h2>Summary</h2><p>' + meeting.aiSummary.summary + '</p><h2>Key Points</h2><ul>' + meeting.aiSummary.keyPoints?.map(p => '<li>' + p + '</li>').join('') + '</ul><h2>Action Items</h2><ul>' + meeting.aiSummary.actionItems?.map(a => '<li class="action">✓ ' + a + '</li>').join('') + '</ul>' : '<div class="no-ai"><strong>AI Summary Not Available</strong><br>Add your OpenAI API key in Settings to enable AI transcription.</div>') + '</body></html>';
+    const html = '<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{font-family:-apple-system,sans-serif;padding:40px;max-width:800px;margin:0 auto}h1{color:#1a1a1a;font-size:24px}.meta{color:#6b7280;font-size:14px;margin-bottom:24px}.no-ai{background:#fef3c7;color:#92400e;padding:16px;border-radius:8px;margin-bottom:24px}h2{color:#2563eb;font-size:14px;text-transform:uppercase;letter-spacing:1px;margin:24px 0 12px}p,li{color:#1f2937;line-height:1.6}ul{padding-left:20px}.action{color:#22c55e}.speaker-tag{background:#f59e0b;color:#fff;padding:4px 12px;border-radius:12px;font-size:12px;margin-right:8px}</style></head><body><h1>' + meeting.title + '</h1><div class="meta">' + meeting.duration + ' • ' + meeting.folder + ' • ' + new Date(meeting.date).toLocaleDateString() + '</div>' + (meeting.speakers?.length ? '<div><strong>Speakers:</strong><br>' + meeting.speakers.map(s => '<span class="speaker-tag">' + s + '</span>').join('') + '</div>' : '') + (meeting.aiSummary ? '<h2>Summary</h2><p>' + meeting.aiSummary.summary + '</p><h2>Key Points</h2><ul>' + meeting.aiSummary.keyPoints?.map(p => '<li>' + p + '</li>').join('') + '</ul><h2>Action Items</h2><ul>' + meeting.aiSummary.actionItems?.map(a => '<li class="action">✓ ' + a + '</li>').join('') + '</ul>' : '<div class="no-ai"><strong>AI Summary Not Available</strong><br>Add your OpenAI API key in Settings.</div>') + '</body></html>';
     try { const { uri } = await Print.printToFileAsync({ html }); await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Export Meeting Notes', UTI: 'com.adobe.pdf' }); } catch (e) { Alert.alert('Error', 'Could not export PDF'); }
   };
 
@@ -114,13 +126,28 @@ export default function HomeScreen() {
 
       <Modal visible={showRecord} transparent animationType="slide">
         <View style={styles.modalOverlay}><ScrollView><View style={styles.modal}>
-          <View style={styles.modalHeader}><Text style={styles.modalTitle}>NEW RECORDING</Text><TouchableOpacity onPress={() => { setShowRecord(false); if (timer) clearInterval(timer); }}><Text style={styles.modalClose}>X</Text></TouchableOpacity></View>
+          <View style={styles.modalHeader}><Text style={styles.modalTitle}>NEW RECORDING</Text><TouchableOpacity onPress={() => { setShowRecord(false); if (timer) clearInterval(timer); setIsRecording(false); }}><Text style={styles.modalClose}>X</Text></TouchableOpacity></View>
           <TextInput style={styles.titleInput} placeholder="Meeting title..." value={title} onChangeText={setTitle} />
           <View style={styles.folderSelect}>{FOLDERS.slice(1).map(f => <TouchableOpacity key={f} style={[styles.chip, recFolder === f && styles.chipActive]} onPress={() => setRecFolder(f)}><Text style={[styles.chipText, recFolder === f && styles.chipTextActive]}>{f}</Text></TouchableOpacity>)}</View>
           <Text style={styles.speakerLabel}>Tag Speakers (optional)</Text>
           <View style={styles.speakerInputRow}><TextInput style={styles.speakerInput} placeholder="Enter name..." value={speakerInput} onChangeText={setSpeakerInput} onSubmitEditing={addSpeaker} /><TouchableOpacity style={styles.addSpeakerBtn} onPress={addSpeaker}><Text style={styles.addSpeakerText}>ADD</Text></TouchableOpacity></View>
           {speakers.length > 0 && <View style={styles.speakerTags}>{speakers.map((s, i) => <TouchableOpacity key={i} style={styles.speakerTag} onPress={() => removeSpeaker(s)}><Text style={styles.speakerTagText}>{s} ×</Text></TouchableOpacity>)}</View>}
-          <View style={styles.recArea}><TouchableOpacity style={[styles.recBtn, isRecording && styles.recBtnActive]} onPressIn={startRecording} onPressOut={stopRecording}><View style={[styles.recBtnInner, isRecording && styles.recBtnInnerActive]}><Text style={styles.recIcon}>{isRecording ? 'STOP' : 'REC'}</Text></View></TouchableOpacity><Text style={styles.recTime}>{isRecording ? 'Recording ' + formatTime(duration) : 'Hold to record'}</Text></View>
+          
+          {/* SINGLE TAP RECORDING BUTTON */}
+          <View style={styles.recArea}>
+            <TouchableOpacity 
+              style={[styles.recBtn, isRecording && styles.recBtnActive]} 
+              onPress={toggleRecording}
+            >
+              <View style={[styles.recBtnInner, isRecording && styles.recBtnInnerActive]}>
+                <Text style={styles.recIcon}>{isRecording ? '⏹ STOP' : '🎤 START'}</Text>
+              </View>
+            </TouchableOpacity>
+            <Text style={styles.recTime}>
+              {isRecording ? 'Recording ' + formatTime(duration) : 'Tap to start recording'}
+            </Text>
+            {isRecording && <Text style={styles.recHint}>Tap again to stop</Text>}
+          </View>
         </View></ScrollView></View>
       </Modal>
 
@@ -132,7 +159,7 @@ export default function HomeScreen() {
           <Text style={styles.apiHint}>Get key from platform.openai.com/api-keys</Text>
           {!hasApiKey(apiKey) && apiKey.length > 0 && <View style={styles.apiError}><Text style={styles.apiErrorText}>Invalid. Must start with "sk-"</Text></View>}
           {hasApiKey(apiKey) && <View style={styles.apiSuccess}><Text style={styles.apiSuccessText}>✓ API Key configured</Text></View>}
-          {!apiKey && <View style={styles.apiRequired}><Text style={styles.apiRequiredText}>AI features require API key. Without it, you can only record and organize meetings.</Text></View>}
+          {!apiKey && <View style={styles.apiRequired}><Text style={styles.apiRequiredText}>AI summary requires API key.</Text></View>}
           <TouchableOpacity style={styles.saveBtn} onPress={() => setShowSettings(false)}><Text style={styles.saveBtnText}>{hasApiKey(apiKey) ? 'SAVE' : 'CLOSE'}</Text></TouchableOpacity>
           <TouchableOpacity style={styles.linkBtn} onPress={() => Linking.openURL('https://platform.openai.com/api-keys')}><Text style={styles.linkBtnText}>Get API Key →</Text></TouchableOpacity>
         </View></View>
@@ -145,8 +172,8 @@ export default function HomeScreen() {
             <Text style={styles.detailTitle}>{selected?.title}</Text>
             <Text style={styles.detailMeta}>{selected?.duration} • {selected?.folder} • {new Date(selected?.date).toLocaleDateString()}</Text>
             {selected?.speakers?.length > 0 && <View style={styles.speakersBox}><Text style={styles.speakersLabel}>Speakers</Text><View style={styles.speakersRow}>{selected.speakers.map((s, i) => <Text key={i} style={styles.speakerBadge}>{s}</Text>)}</View></View>}
-            {!selected?.aiSummary && (selected?.hasAudio ? <TouchableOpacity style={styles.processBtn} onPress={handleProcess}><Text style={styles.processBtnText}>GENERATE AI SUMMARY</Text></TouchableOpacity> : <View style={styles.noAudioBox}><Text style={styles.noAudioText}>Record a meeting to enable AI transcription.</Text></View>)}
-            {processing && <View style={styles.processingBox}><ActivityIndicator size="small" color={COLORS.accent} /><Text style={styles.processingText}>{processingStatus === 'transcribing' ? 'Transcribing...' : processingStatus === 'summarizing' ? 'Generating summary...' : 'Processing...'}</Text></View>}
+            {!selected?.aiSummary && (selected?.hasAudio ? <TouchableOpacity style={styles.processBtn} onPress={handleProcess}><Text style={styles.processBtnText}>GENERATE AI SUMMARY</Text></TouchableOpacity> : <View style={styles.noAudioBox}><Text style={styles.noAudioText}>Record a meeting to enable AI summary.</Text></View>)}
+            {processing && <View style={styles.processingBox}><ActivityIndicator size="small" color={COLORS.accent} /><Text style={styles.processingText}>Generating summary with GPT...</Text></View>}
             {selected?.aiSummary && (<>
               <View style={styles.section}><Text style={styles.sectionTitle}>SUMMARY</Text><Text style={styles.sectionText}>{selected.aiSummary.summary}</Text></View>
               <View style={styles.section}><Text style={styles.sectionTitle}>KEY POINTS</Text>{selected.aiSummary.keyPoints?.map((p, i) => <View key={i} style={styles.listItem}><Text style={styles.bullet}>•</Text><Text style={styles.listText}>{p}</Text></View>)}</View>
@@ -207,12 +234,13 @@ const styles = StyleSheet.create({
   speakerTag: { backgroundColor: COLORS.warning, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16 },
   speakerTagText: { color: COLORS.card, fontSize: 12 },
   recArea: { alignItems: 'center', paddingVertical: 20 },
-  recBtn: { width: 100, height: 100, borderRadius: 50, backgroundColor: COLORS.background, justifyContent: 'center', alignItems: 'center', marginBottom: 16 },
+  recBtn: { width: 140, height: 140, borderRadius: 70, backgroundColor: COLORS.background, justifyContent: 'center', alignItems: 'center', marginBottom: 16 },
   recBtnActive: { backgroundColor: COLORS.error },
-  recBtnInner: { width: 80, height: 80, borderRadius: 40, backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center' },
+  recBtnInner: { width: 120, height: 120, borderRadius: 60, backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center' },
   recBtnInnerActive: { backgroundColor: COLORS.card },
-  recIcon: { fontSize: 14, fontWeight: '700', color: COLORS.card },
+  recIcon: { fontSize: 16, fontWeight: '700', color: COLORS.card },
   recTime: { fontSize: 14, color: COLORS.textSecondary },
+  recHint: { fontSize: 12, color: COLORS.error, marginTop: 8 },
   apiLabel: { fontSize: 14, fontWeight: '600', marginBottom: 8, marginTop: 16 },
   apiInput: { backgroundColor: COLORS.background, padding: 14, borderRadius: 12, fontSize: 14 },
   apiHint: { fontSize: 12, color: COLORS.textSecondary, marginTop: 6 },
