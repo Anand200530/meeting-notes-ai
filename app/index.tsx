@@ -90,7 +90,7 @@ export default function HomeScreen() {
       });
       if (!response.ok) throw new Error('AI failed');
       const data = await response.json();
-      const aiSummary = JSON.parse(data.const data = awaitchoices[0].message.content);
+      const aiSummary = JSON.parse(data.choices[0].message.content);
       const updatedMeeting = { ...selected, transcript: manualTranscript, aiSummary };
       setMeetings(meetings.map(m => m.id === selected.id ? updatedMeeting : m));
       setSelected(updatedMeeting);
