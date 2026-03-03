@@ -1,0 +1,34 @@
+{
+  "expo": {
+    "name": "Meeting Notes AI",
+    "slug": "meeting-notes-ai",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/images/splash-icon.png",
+      "imageWidth": 200,
+      "resizeMode": "contain",
+      "backgroundColor": "#1a1a1a"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.meetingnotes.ai"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "backgroundColor": "#1a1a1a"
+      },
+      "package": "com.meetingnotes.ai",
+      "permissions": ["RECORD_AUDIO"]
+    },
+    "plugins": [
+      "expo-router",
+      ["expo-av", {
+        "microphonePermission": "Allow Meeting Notes AI to access your microphone."
+      }]
+    ]
+  }
+}
