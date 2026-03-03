@@ -1,9 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import {
-  StyleSheet, Text, View, TouchableOpacity, TextInput, FlatList,
-  Modal, Alert, ActivityIndicator, ScrollView, Share, SafeAreaView, 
-  StatusBar, Clipboard, Linking, Platform
-} from 'react-native';
+import { StyleSheet, Text, View, TouchableOpacity, TextInput, FlatList, Modal, Alert, ActivityIndicator, ScrollView, Share, SafeAreaView, StatusBar, Clipboard, Linking } from 'react-native';
 import { Audio } from 'expo-av';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Print from 'expo-print';
@@ -38,19 +34,8 @@ export default function HomeScreen() {
   const [processingStatus, setProcessingStatus] = useState('');
 
   useEffect(() => { loadSettings(); }, []);
-
-  const loadSettings = async () => {
-    try {
-      const settings = await AsyncStorage.getItem('@settings');
-      if (settings) setApiKey(JSON.parse(settings).openai || '');
-    } catch {}
-  };
-
-  const saveApiKey = async (key) => {
-    setApiKey(key);
-    try { await AsyncStorage.setItem('@settings', JSON.stringify({ openai: key })); } catch {}
-  };
-
+  const loadSettings = async () => { try { const settings = await AsyncStorage.getItem('@settings'); if (settings) setApiKey(JSON.parse(settings).openai || ''); } catch {} };
+  const saveApiKey = async (key) => { setApiKey(key); try { await AsyncStorage.setItem('@settings', JSON.stringify({ openai: key })); } catch {} };
   const filtered = meetings.filter(m => (folder === 'All' || m.folder === folder) && m.title.toLowerCase().includes(search.toLowerCase()));
 
   const startRecording = async () => {
@@ -59,9 +44,7 @@ export default function HomeScreen() {
       if (status !== 'granted') { Alert.alert('Permission Required', 'Please grant microphone permission.'); return; }
       await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
       const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-      setRecording(recording);
-      setIsRecording(true);
-      setDuration(0);
+      setRecording(recording); setIsRecording(true); setDuration(0);
       setTimer(setInterval(() => setDuration(d => d + 1), 1000));
     } catch (e) { Alert.alert('Error', 'Could not start recording'); }
   };
