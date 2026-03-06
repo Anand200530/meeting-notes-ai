@@ -4,7 +4,6 @@ import { Audio } from 'expo-av';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
-import { processMeeting, hasApiKey } from '../src/services/aiService';
 
 const DEMO_MEETINGS = [
   { id: '1', title: 'Weekly Team Standup', duration: '15:32', date: new Date().toISOString(), speakers: [], aiSummary: null, folder: 'Work', hasAudio: false, transcript: '' },
@@ -21,6 +20,7 @@ export default function HomeScreen() {
   const [showRecord, setShowRecord] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [apiKey, setApiKey] = useState('');
+  const [assemblyKey, setAssemblyKey] = useState('');
   const [recording, setRecording] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
   const [duration, setDuration] = useState(0);
@@ -34,25 +34,38 @@ export default function HomeScreen() {
   const [processingStatus, setProcessingStatus] = useState('');
   const [manualTranscript, setManualTranscript] = useState('');
   const [showTranscriptInput, setShowTranscriptInput] = useState(false);
+  const [sttChoice, setSttChoice] = useState('whisper'); // whisper, assembly, manual
 
   useEffect(() => { loadSettings(); }, []);
-  const loadSettings = async () => { try { const settings = await AsyncStorage.getItem('@settings'); if (settings) setApiKey(JSON.parse(settings).openai || ''); } catch {} };
-  const saveApiKey = async (key) => { setApiKey(key); try { await AsyncStorage.setItem('@settings', JSON.stringify({ openai: key })); } catch {} };
+  
+  const loadSettings = async () => { 
+    try { 
+      const settings = await AsyncStorage.getItem('@settings'); 
+      if (settings) {
+        const p = JSON.parse(settings);
+        setApiKey(p.openai || '');
+        setAssemblyKey(p.assemblyai || '');
+      }
+    } catch {} 
+  };
+  
+  const saveSettings = async () => {
+    try { 
+      await AsyncStorage.setItem('@settings', JSON.stringify({ openai: apiKey, assemblyai: assemblyKey })); 
+    } catch {}
+  };
+
+  const hasApiKey = (key) => key && key.startsWith('sk-');
   const filtered = meetings.filter(m => (folder === 'All' || m.folder === folder) && m.title.toLowerCase().includes(search.toLowerCase()));
 
   const closeModals = () => {
-    setShowRecord(false);
-    setShowSettings(false);
-    setShowTranscriptInput(false);
-    if (timer) clearInterval(timer);
-    setIsRecording(false);
-    Keyboard.dismiss();
+    setShowRecord(false); setShowSettings(false); setShowTranscriptInput(false);
+    if (timer) clearInterval(timer); setIsRecording(false); Keyboard.dismiss();
   };
 
   const toggleRecording = async () => {
     if (isRecording) {
-      if (timer) clearInterval(timer);
-      setIsRecording(false);
+      if (timer) clearInterval(timer); setIsRecording(false);
       try {
         await recording.stopAndUnloadAsync();
         const uri = recording.getURI();
@@ -78,19 +91,44 @@ export default function HomeScreen() {
   const addSpeaker = () => { const n = speakerInput.trim(); if (n && !speakers.includes(n)) { setSpeakers([...speakers, n]); setSpeakerInput(''); } };
   const removeSpeaker = (n) => setSpeakers(speakers.filter(s => s !== n));
 
+  // Transcribe with chosen STT
+  const transcribeAudio = async (audioUri, apiType) => {
+    if (apiType === 'assembly') {
+      // AssemblyAI free tier
+      const uploadRes = await fetch('https://api.assemblyai.com/v2/upload', { method: 'POST', headers: { 'Authorization': assemblyKey }, body: audioUri });
+      const { upload_url } = await uploadRes.json();
+      const transcriptRes = await fetch('https://api.assemblyai.com/v2/transcript', { method: 'POST', headers: { 'Authorization': assemblyKey, 'Content-Type': 'application/json' }, body: JSON.stringify({ audio_url: upload_url }) });
+      const { id } = await transcriptRes.json();
+      while (true) { await new Promise(r => setTimeout(r, 1000)); const statusRes = await fetch(`https://api.assemblyai.com/v2/transcript/${id}`, { headers: { 'Authorization': assemblyKey } }); const result = await statusRes.json(); if (result.status === 'completed') return result.text; if (result.status === 'error') throw new Error('AssemblyAI failed'); }
+    } else {
+      // OpenAI Whisper
+      const response = await fetch(audioUri);
+      const blob = await response.blob();
+      const formData = new FormData(); formData.append('file', blob, 'recording.m4a'); formData.append('model', 'whisper-1');
+      const result = await fetch('https://api.openai.com/v1/audio/transcriptions', { method: 'POST', headers: { 'Authorization': `Bearer ${apiKey}` }, body: formData });
+      if (!result.ok) throw new Error('Whisper failed');
+      return await result.text();
+    }
+  };
+
+  // Generate summary with GPT
+  const generateSummary = async (transcript) => {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify({ model: 'gpt-3.5-turbo', messages: [{ role: 'system', content: 'You are a meeting notes analyzer. Return valid JSON.' }, { role: 'user', content: `Analyze and provide JSON with summary, keyPoints, actionItems, questions.\n\n${transcript.substring(0, 6000)}` }], temperature: 0.3, response_format: { type: 'json_object' } }),
+    });
+    if (!response.ok) throw new Error('GPT failed');
+    const data = await response.json();
+    return JSON.parse(data.choices[0].message.content);
+  };
+
   const handleManualSummary = async () => {
     if (!manualTranscript.trim()) { Alert.alert('Error', 'Please enter a transcript'); return; }
-    if (!hasApiKey(apiKey)) { Alert.alert('API Key Required', 'Add your OpenAI API key.'); return; }
+    if (!hasApiKey(apiKey)) { Alert.alert('API Key Required', 'Add your OpenAI API key for GPT.'); return; }
     setProcessing(true);
     try {
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-        body: JSON.stringify({ model: 'gpt-3.5-turbo', messages: [{ role: 'system', content: 'You are a meeting notes analyzer. Return valid JSON.' }, { role: 'user', content: `Analyze and provide JSON with summary, keyPoints, actionItems, questions.\n\n${manualTranscript.substring(0, 6000)}` }], temperature: 0.3, response_format: { type: 'json_object' } }),
-      });
-      if (!response.ok) throw new Error('AI failed');
-      const data = await response.json();
-      const aiSummary = JSON.parse(data.choices[0].message.content);
+      const aiSummary = await generateSummary(manualTranscript);
       const updatedMeeting = { ...selected, transcript: manualTranscript, aiSummary };
       setMeetings(meetings.map(m => m.id === selected.id ? updatedMeeting : m));
       setSelected(updatedMeeting);
@@ -103,13 +141,31 @@ export default function HomeScreen() {
 
   const handleProcess = async () => {
     if (!selected) return;
-    if (!hasApiKey(apiKey)) { Alert.alert('No API Key', 'Add API key or enter transcript', [{ text: 'Add API Key', onPress: () => setShowSettings(true) }, { text: 'Transcript', onPress: () => setShowTranscriptInput(true) }, { text: 'Cancel', style: 'cancel' }]); return; }
+    
+    if (sttChoice === 'manual') {
+      setShowTranscriptInput(true);
+      return;
+    }
+    
+    if (sttChoice === 'assembly' && !assemblyKey) {
+      Alert.alert('API Key Required', 'Add AssemblyAI key in Settings for free transcription.'); return;
+    }
+    
+    if (sttChoice === 'whisper' && !hasApiKey(apiKey)) {
+      Alert.alert('API Key Required', 'Add OpenAI API key or choose AssemblyAI (free).'); return;
+    }
+    
     if (!selected.hasAudio) { Alert.alert('No Recording', 'Record a meeting first.'); return; }
+    
     setProcessing(true);
     try {
-      const processed = await processMeeting(selected, apiKey, setProcessingStatus);
-      setMeetings(meetings.map(m => m.id === selected.id ? processed : m));
-      setSelected(processed);
+      setProcessingStatus('transcribing');
+      const transcript = await transcribeAudio(selected.audioUri, sttChoice);
+      setProcessingStatus('summarizing');
+      const aiSummary = await generateSummary(transcript);
+      const updatedMeeting = { ...selected, transcript, aiSummary };
+      setMeetings(meetings.map(m => m.id === selected.id ? updatedMeeting : m));
+      setSelected(updatedMeeting);
       Alert.alert('Success', 'AI summary generated!');
     } catch (e) { Alert.alert('Error', 'Failed: ' + e.message); }
     finally { setProcessing(false); setProcessingStatus(''); }
@@ -133,20 +189,18 @@ export default function HomeScreen() {
       <View style={styles.cardHeader}><Text style={styles.cardDuration}>{item.duration}</Text>{item.aiSummary && <Text style={styles.aiTag}>AI</Text>}</View>
       <Text style={styles.cardTitle} numberOfLines={2}>{item.title}</Text>
       <Text style={styles.cardDate}>{new Date(item.date).toLocaleDateString()}</Text>
-      {item.speakers?.length > 0 && <Text style={styles.cardSpeakers}>{item.speakers.join(', ')}</Text>}
     </TouchableOpacity>
   );
 
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" />
-      <View style={styles.header}><Text style={styles.headerTitle}>Meeting Notes AI</Text><TouchableOpacity onPress={() => setShowSettings(true)}><Text style={[styles.settingsBtn, hasApiKey(apiKey) && styles.settingsBtnActive]}>{hasApiKey(apiKey) ? 'API ✓' : 'SETTINGS'}</Text></TouchableOpacity></View>
+      <View style={styles.header}><Text style={styles.headerTitle}>Meeting Notes AI</Text><TouchableOpacity onPress={() => setShowSettings(true)}><Text style={[styles.settingsBtn, hasApiKey(apiKey) && styles.settingsBtnActive]}>SETTINGS</Text></TouchableOpacity></View>
       <View style={styles.searchBox}><TextInput style={styles.searchInput} placeholder="Search meetings..." value={search} onChangeText={setSearch} /></View>
       <View style={styles.folders}>{FOLDERS.map(f => <TouchableOpacity key={f} style={[styles.folder, folder === f && styles.folderActive]} onPress={() => setFolder(f)}><Text style={[styles.folderText, folder === f && styles.folderTextActive]}>{f}</Text></TouchableOpacity>)}</View>
       <FlatList data={filtered} renderItem={renderItem} keyExtractor={i => i.id} numColumns={2} columnWrapperStyle={styles.row} contentContainerStyle={styles.list} ListEmptyComponent={<View style={styles.empty}><Text style={styles.emptyIcon}>🎙️</Text><Text style={styles.emptyText}>No meetings</Text></View>} />
       <TouchableOpacity style={styles.fab} onPress={() => setShowRecord(true)}><Text style={styles.fabIcon}>+</Text></TouchableOpacity>
 
-      {/* Recording Modal */}
       <Modal visible={showRecord} transparent animationType="slide" onRequestClose={closeModals}>
         <TouchableWithoutFeedback onPress={closeModals}>
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
@@ -167,7 +221,6 @@ export default function HomeScreen() {
         </TouchableWithoutFeedback>
       </Modal>
 
-      {/* Settings Modal */}
       <Modal visible={showSettings} transparent animationType="slide" onRequestClose={closeModals}>
         <TouchableWithoutFeedback onPress={closeModals}>
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
@@ -175,13 +228,29 @@ export default function HomeScreen() {
               <View style={styles.modalContent}>
                 <View style={styles.modalHeader}><Text style={styles.modalTitle}>API SETTINGS</Text><TouchableOpacity onPress={closeModals}><Text style={styles.modalClose}>X</Text></TouchableOpacity></View>
                 <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-                  <Text style={styles.apiLabel}>OpenAI API Key</Text>
-                  <TextInput style={styles.apiInput} placeholder="sk-..." secureTextEntry value={apiKey} onChangeText={saveApiKey} />
-                  <Text style={styles.apiHint}>Get key from platform.openai.com/api-keys</Text>
-                  {!hasApiKey(apiKey) && apiKey.length > 0 && <View style={styles.apiError}><Text style={styles.apiErrorText}>Invalid format</Text></View>}
-                  {hasApiKey(apiKey) && <View style={styles.apiSuccess}><Text style={styles.apiSuccessText}>✓ API Key configured</Text></View>}
-                  <TouchableOpacity style={styles.saveBtn} onPress={closeModals}><Text style={styles.saveBtnText}>{hasApiKey(apiKey) ? 'DONE' : 'CLOSE'}</Text></TouchableOpacity>
-                  <TouchableOpacity style={styles.linkBtn} onPress={() => Linking.openURL('https://platform.openai.com/api-keys')}><Text style={styles.linkBtnText}>Get API Key →</Text></TouchableOpacity>
+                  
+                  <Text style={styles.apiLabel}>1. OpenAI API Key (for GPT Summary)</Text>
+                  <TextInput style={styles.apiInput} placeholder="sk-..." secureTextEntry value={apiKey} onChangeText={setApiKey} />
+                  <Text style={styles.apiHint}>Required for GPT summary. Get from platform.openai.com</Text>
+                  
+                  <Text style={styles.apiLabel}>2. AssemblyAI Key (FREE - for Transcription)</Text>
+                  <TextInput style={styles.apiInput} placeholder="Enter AssemblyAI key..." value={assemblyKey} onChangeText={setAssemblyKey} />
+                  <Text style={styles.apiHint}>Get free key from assemblyai.com - gives free minutes</Text>
+                  
+                  <Text style={styles.apiLabel}>Choose Transcription Method:</Text>
+                  <View style={styles.sttOptions}>
+                    <TouchableOpacity style={[styles.sttBtn, sttChoice === 'assembly' && styles.sttBtnActive]} onPress={() => setSttChoice('assembly')}>
+                      <Text style={[styles.sttBtnText, sttChoice === 'assembly' && styles.sttBtnTextActive]}>AssemblyAI (Free)</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[styles.sttBtn, sttChoice === 'whisper' && styles.sttBtnActive]} onPress={() => setSttChoice('whisper')}>
+                      <Text style={[styles.sttBtnText, sttChoice === 'whisper' && styles.sttBtnTextActive]}>Whisper (Paid)</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[styles.sttBtn, sttChoice === 'manual' && styles.sttBtnActive]} onPress={() => setSttChoice('manual')}>
+                      <Text style={[styles.sttBtnText, sttChoice === 'manual' && styles.sttBtnTextActive]}>Manual</Text>
+                    </TouchableOpacity>
+                  </View>
+                  
+                  <TouchableOpacity style={styles.saveBtn} onPress={() => { saveSettings(); closeModals(); }}><Text style={styles.saveBtnText}>SAVE</Text></TouchableOpacity>
                 </ScrollView>
               </View>
             </TouchableWithoutFeedback>
@@ -189,37 +258,44 @@ export default function HomeScreen() {
         </TouchableWithoutFeedback>
       </Modal>
 
-      {/* Transcript Modal */}
       <Modal visible={showTranscriptInput} transparent animationType="slide" onRequestClose={closeModals}>
         <TouchableWithoutFeedback onPress={closeModals}>
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
             <TouchableWithoutFeedback>
               <View style={styles.modalContent}>
                 <View style={styles.modalHeader}><Text style={styles.modalTitle}>ENTER TRANSCRIPT</Text><TouchableOpacity onPress={closeModals}><Text style={styles.modalClose}>X</Text></TouchableOpacity></View>
-                <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-                  <Text style={styles.apiHint}>Paste transcript, then generate AI summary.</Text>
-                  <TextInput style={styles.transcriptInput} placeholder="Paste transcript here..." value={manualTranscript} onChangeText={setManualTranscript} multiline numberOfLines={6} textAlignVertical="top" />
-                  <TouchableOpacity style={styles.saveBtn} onPress={handleManualSummary} disabled={processing}>
-                    {processing ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveBtnText}>GENERATE SUMMARY</Text>}
-                  </TouchableOpacity>
-                </ScrollView>
+                <Text style={styles.apiHint}>Paste transcript, then generate AI summary.</Text>
+                <TextInput style={styles.transcriptInput} placeholder="Paste transcript here..." value={manualTranscript} onChangeText={setManualTranscript} multiline numberOfLines={6} textAlignVertical="top" />
+                <TouchableOpacity style={styles.saveBtn} onPress={handleManualSummary} disabled={processing}>
+                  {processing ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveBtnText}>GENERATE SUMMARY</Text>}
+                </TouchableOpacity>
               </View>
             </TouchableWithoutFeedback>
           </KeyboardAvoidingView>
         </TouchableWithoutFeedback>
       </Modal>
 
-      {/* Detail Modal */}
       <Modal visible={!!selected} transparent animationType="slide" onRequestClose={() => setSelected(null)}>
         <View style={styles.detailOverlay}><View style={styles.detail}>
           <View style={styles.detailHeader}><TouchableOpacity onPress={() => setSelected(null)}><Text style={styles.backBtn}>← BACK</Text></TouchableOpacity><View style={styles.detailActions}><TouchableOpacity onPress={() => exportAsPDF(selected)}><Text style={styles.actionBtn}>PDF</Text></TouchableOpacity><TouchableOpacity onPress={() => Share.share({ message: exportAsText(selected) })}><Text style={styles.actionBtn}>SHARE</Text></TouchableOpacity><TouchableOpacity onPress={() => { Clipboard.setString(exportAsText(selected)); Alert.alert('Copied', 'Meeting copied!'); }}><Text style={styles.actionBtn}>COPY</Text></TouchableOpacity><TouchableOpacity onPress={() => { setMeetings(meetings.filter(m => m.id !== selected?.id)); setSelected(null); }}><Text style={[styles.actionBtn, {color: COLORS.error}]}>DEL</Text></TouchableOpacity></View></View>
           <ScrollView style={styles.detailContent}>
             <Text style={styles.detailTitle}>{selected?.title}</Text>
             <Text style={styles.detailMeta}>{selected?.duration} • {selected?.folder} • {new Date(selected?.date).toLocaleDateString()}</Text>
-            {selected?.speakers?.length > 0 && <View style={styles.speakersBox}><Text style={styles.speakersLabel}>Speakers</Text><View style={styles.speakersRow}>{selected.speakers.map((s, i) => <Text key={i} style={styles.speakerBadge}>{s}</Text>)}</View></View>}
-            {!selected?.aiSummary && (<View style={styles.optionsBox}><Text style={styles.optionsTitle}>Generate AI Summary</Text><TouchableOpacity style={styles.processBtn} onPress={handleProcess}><Text style={styles.processBtnText}>FROM AUDIO</Text></TouchableOpacity><TouchableOpacity style={styles.manualBtn} onPress={() => setShowTranscriptInput(true)}><Text style={styles.manualBtnText}>FROM TRANSCRIPT</Text></TouchableOpacity></View>)}
-            {processing && <View style={styles.processingBox}><ActivityIndicator size="small" color={COLORS.accent} /><Text style={styles.processingText}>Processing...</Text></View>}
-            {selected?.aiSummary && (<><View style={styles.section}><Text style={styles.sectionTitle}>SUMMARY</Text><Text style={styles.sectionText}>{selected.aiSummary.summary}</Text></View><View style={styles.section}><Text style={styles.sectionTitle}>KEY POINTS</Text>{selected.aiSummary.keyPoints?.map((p, i) => <View key={i} style={styles.listItem}><Text style={styles.bullet}>•</Text><Text style={styles.listText}>{p}</Text></View>)}</View><View style={styles.section}><Text style={styles.sectionTitle}>ACTION ITEMS</Text>{selected.aiSummary.actionItems?.map((a, i) => <View key={i} style={styles.listItem}><Text style={styles.bulletSuccess}>✓</Text><Text style={styles.listText}>{a}</Text></View>)}</View></>)}
+            
+            {!selected?.aiSummary && (<View style={styles.optionsBox}>
+              <Text style={styles.optionsTitle}>Generate AI Summary</Text>
+              <TouchableOpacity style={styles.processBtn} onPress={handleProcess} disabled={processing}>
+                <Text style={styles.processBtnText}>{processing ? 'Processing...' : 'GENERATE SUMMARY'}</Text>
+              </TouchableOpacity>
+              {processingStatus === 'transcribing' && <Text style={styles.processingText}>Transcribing audio...</Text>}
+              {processingStatus === 'summarizing' && <Text style={styles.processingText}>Generating summary...</Text>}
+            </View>)}
+            
+            {selected?.aiSummary && (<>
+              <View style={styles.section}><Text style={styles.sectionTitle}>SUMMARY</Text><Text style={styles.sectionText}>{selected.aiSummary.summary}</Text></View>
+              <View style={styles.section}><Text style={styles.sectionTitle}>KEY POINTS</Text>{selected.aiSummary.keyPoints?.map((p, i) => <View key={i} style={styles.listItem}><Text style={styles.bullet}>•</Text><Text style={styles.listText}>{p}</Text></View>)}</View>
+              <View style={styles.section}><Text style={styles.sectionTitle}>ACTION ITEMS</Text>{selected.aiSummary.actionItems?.map((a, i) => <View key={i} style={styles.listItem}><Text style={styles.bulletSuccess}>✓</Text><Text style={styles.listText}>{a}</Text></View>)}</View>
+            </>)}
           </ScrollView>
         </View></View>
       </Modal>
@@ -248,7 +324,6 @@ const styles = StyleSheet.create({
   aiTag: { fontSize: 10, backgroundColor: COLORS.accent, color: COLORS.card, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10, fontWeight: '600' },
   cardTitle: { fontSize: 15, fontWeight: '600', color: COLORS.text, marginBottom: 4 },
   cardDate: { fontSize: 12, color: COLORS.textSecondary },
-  cardSpeakers: { fontSize: 11, color: COLORS.warning, marginTop: 4 },
   empty: { alignItems: 'center', paddingTop: 60 },
   emptyIcon: { fontSize: 48, marginBottom: 16 },
   emptyText: { fontSize: 18, fontWeight: '600', color: COLORS.text },
@@ -282,15 +357,14 @@ const styles = StyleSheet.create({
   recTime: { fontSize: 14, color: COLORS.textSecondary },
   apiLabel: { fontSize: 14, fontWeight: '600', marginBottom: 8, marginTop: 16 },
   apiInput: { backgroundColor: COLORS.background, padding: 14, borderRadius: 12, fontSize: 14 },
-  apiHint: { fontSize: 12, color: COLORS.textSecondary, marginTop: 6 },
-  apiError: { marginTop: 16, padding: 12, backgroundColor: '#fee2e2', borderRadius: 8 },
-  apiErrorText: { fontSize: 14, color: COLORS.error },
-  apiSuccess: { marginTop: 16, padding: 12, backgroundColor: '#dcfce7', borderRadius: 8 },
-  apiSuccessText: { fontSize: 14, color: COLORS.success },
+  apiHint: { fontSize: 12, color: COLORS.textSecondary, marginTop: 6, marginBottom: 12 },
+  sttOptions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
+  sttBtn: { paddingVertical: 8, paddingHorizontal: 16, borderRadius: 20, backgroundColor: COLORS.background, borderWidth: 1, borderColor: COLORS.border },
+  sttBtnActive: { backgroundColor: COLORS.success, borderColor: COLORS.success },
+  sttBtnText: { fontSize: 12, color: COLORS.textSecondary },
+  sttBtnTextActive: { color: COLORS.card },
   saveBtn: { backgroundColor: COLORS.primary, padding: 16, borderRadius: 12, alignItems: 'center', marginTop: 24 },
   saveBtnText: { color: COLORS.card, fontWeight: '700' },
-  linkBtn: { marginTop: 16, alignItems: 'center' },
-  linkBtnText: { color: COLORS.accent, fontSize: 14 },
   transcriptInput: { backgroundColor: COLORS.background, padding: 16, borderRadius: 12, fontSize: 14, marginTop: 16, minHeight: 120, textAlignVertical: 'top' },
   detailOverlay: { flex: 1, backgroundColor: COLORS.background },
   detail: { flex: 1, backgroundColor: COLORS.background },
@@ -301,18 +375,11 @@ const styles = StyleSheet.create({
   detailContent: { flex: 1, padding: 20 },
   detailTitle: { fontSize: 24, fontWeight: '700', marginBottom: 8 },
   detailMeta: { fontSize: 13, color: COLORS.textSecondary, marginBottom: 16 },
-  speakersBox: { backgroundColor: COLORS.card, borderRadius: 12, padding: 12, marginBottom: 20 },
-  speakersLabel: { fontSize: 12, color: COLORS.textSecondary, marginBottom: 8 },
-  speakersRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  speakerBadge: { fontSize: 12, backgroundColor: COLORS.warning, color: COLORS.card, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
   optionsBox: { marginBottom: 24 },
   optionsTitle: { fontSize: 14, fontWeight: '600', marginBottom: 12, color: COLORS.text },
   processBtn: { backgroundColor: COLORS.accent, padding: 16, borderRadius: 12, alignItems: 'center', marginBottom: 12 },
   processBtnText: { color: COLORS.card, fontWeight: '700' },
-  manualBtn: { backgroundColor: COLORS.background, padding: 16, borderRadius: 12, alignItems: 'center', borderWidth: 1, borderColor: COLORS.border },
-  manualBtnText: { color: COLORS.text, fontWeight: '600' },
-  processingBox: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 20, backgroundColor: COLORS.card, borderRadius: 12, marginBottom: 24, gap: 12 },
-  processingText: { fontSize: 14, color: COLORS.textSecondary },
+  processingText: { fontSize: 14, color: COLORS.textSecondary, textAlign: 'center' },
   section: { backgroundColor: COLORS.card, borderRadius: 16, padding: 16, marginBottom: 16 },
   sectionTitle: { fontSize: 12, fontWeight: '700', color: COLORS.accent, letterSpacing: 1, marginBottom: 12 },
   sectionText: { fontSize: 14, color: COLORS.text, lineHeight: 22 },

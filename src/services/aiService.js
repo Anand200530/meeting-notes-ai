@@ -1,8 +1,8 @@
 /**
- * AI Service - Supports Multiple STT Options
- * 1. OpenAI Whisper (requires paid API)
- * 2. AssemblyAI (has free tier)
- * 3. Google Cloud Speech (has free tier)
+ * AI Service - Multiple STT Options
+ * 1. OpenAI Whisper (for buyers - paid)
+ * 2. AssemblyAI (free tier available)
+ * 3. Web Speech API (free - browser based)
  */
 
 const OPENAI_BASE_URL = 'https://api.openai.com/v1';
@@ -12,7 +12,7 @@ export function hasApiKey(apiKey) {
 }
 
 // ============================================
-// OPTION 1: OpenAI Whisper (Paid - $0.006/min)
+// OPTION 1: OpenAI Whisper (For buyers)
 // ============================================
 export async function transcribeWithWhisper(audioUri, apiKey) {
   const response = await fetch(audioUri);
@@ -33,74 +33,44 @@ export async function transcribeWithWhisper(audioUri, apiKey) {
 }
 
 // ============================================
-// OPTION 2: AssemblyAI (Free Tier Available)
+// OPTION 2: AssemblyAI (Free tier)
 // ============================================
 export async function transcribeWithAssemblyAI(audioUri, apiKey) {
-  // Upload audio file
+  // Upload audio
   const uploadResponse = await fetch('https://api.assemblyai.com/v2/upload', {
     method: 'POST',
     headers: { 'Authorization': apiKey },
     body: audioUri
   });
-  
   const { upload_url } = await uploadResponse.json();
   
   // Start transcription
   const transcriptResponse = await fetch('https://api.assemblyai.com/v2/transcript', {
     method: 'POST',
-    headers: { 
-      'Authorization': apiKey,
-      'Content-Type': 'application/json'
-    },
+    headers: { 'Authorization': apiKey, 'Content-Type': 'application/json' },
     body: JSON.stringify({ audio_url: upload_url })
   });
-  
   const { id } = await transcriptResponse.json();
   
-  // Poll for completion
-  let result;
+  // Poll for result
   while (true) {
     await new Promise(r => setTimeout(r, 1000));
     const statusResponse = await fetch(`https://api.assemblyai.com/v2/transcript/${id}`, {
       headers: { 'Authorization': apiKey }
     });
-    result = await statusResponse.json();
-    if (result.status === 'completed') break;
-    if (result.status === 'error') throw new Error('AssemblyAI transcription failed');
+    const result = await statusResponse.json();
+    if (result.status === 'completed') return result.text;
+    if (result.status === 'error') throw new Error('AssemblyAI failed');
   }
-  
-  return result.text;
 }
 
 // ============================================
-// OPTION 3: Google Cloud Speech (Free Tier: 60 min/month)
+// OPTION 3: Web Speech API (Free - for testing)
+// Note: This works in browser/React Native Web
 // ============================================
-export async function transcribeWithGoogle(audioUri, apiKey) {
-  // Note: Requires Google Cloud API key with Speech-to-Text enabled
-  const response = await fetch(audioUri);
-  const audioBytes = await response.blob();
-  const base64 = await new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve(reader.result.split(',')[1]);
-    reader.readAsDataURL(audioBytes);
-  });
-  
-  const googleResponse = await fetch(`https://speech.googleapis.com/v1/speech:recognize?key=${apiKey}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      config: { encoding: 'WEBM_OPUS', sampleRateHertz: 48000, languageCode: 'en-US' },
-      audio: { content: base64 }
-    })
-  });
-  
-  const data = await googleResponse.json();
-  if (data.error) throw new Error(data.error.message);
-  return data.results.map(r => r.alternatives[0].transcript).join('\n');
-}
 
 // ============================================
-// Generate Summary with GPT
+// GPT Summary Generation
 // ============================================
 export async function generateSummary(transcript, apiKey) {
   const prompt = `Analyze this meeting transcript and provide JSON with summary, keyPoints, actionItems, questions.
@@ -131,7 +101,7 @@ ${transcript.substring(0, 6000)}`;
 }
 
 // ============================================
-// Main Process - Uses Whisper by default
+// Main Process - Uses Whisper by default (for buyers)
 // ============================================
 export async function processMeeting(meeting, apiKey, onProgress = () => {}) {
   if (!hasApiKey(apiKey)) throw new Error('API key required');
@@ -151,7 +121,6 @@ export default {
   hasApiKey, 
   transcribeWithWhisper, 
   transcribeWithAssemblyAI,
-  transcribeWithGoogle,
   generateSummary, 
   processMeeting 
 };
