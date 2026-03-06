@@ -376,9 +376,15 @@ export default function HomeScreen() {
                 </View>
               ) : null}
               
-              {selected && !selected.aiSummary ? (
+              {selected && selected.hasAudio && !selected.transcript ? (
+                <TouchableOpacity style={styles.transcribeBtn} onPress={handleProcess} disabled={processing}>
+                  <Text style={styles.transcribeBtnText}>{processing ? 'Transcribing...' : 'TRANSCRIBE'}</Text>
+                </TouchableOpacity>
+              ) : null}
+              
+              {selected && selected.transcript && !selected.aiSummary ? (
                 <TouchableOpacity style={styles.processBtn} onPress={handleProcess} disabled={processing}>
-                  <Text style={styles.processBtnText}>{processing ? 'Processing...' : demoMode ? 'GENERATE (Demo)' : 'TRANSCRIBE & SUMMARIZE'}</Text>
+                  <Text style={styles.processBtnText}>{processing ? 'Processing...' : demoMode ? 'GENERATE (Demo)' : (selected.hasAudio ? 'TRANSCRIBE' : 'SUMMARIZE')}</Text>
                 </TouchableOpacity>
               ) : null}
               
@@ -477,6 +483,8 @@ const styles = StyleSheet.create({
   processBtnText: { color: COLORS.card, fontWeight: '700' },
   section: { backgroundColor: COLORS.card, borderRadius: 16, padding: 16, marginBottom: 16 },
   sectionTitle: { fontSize: 12, fontWeight: '700', color: COLORS.accent, letterSpacing: 1, marginBottom: 12 },
+  transcribeBtn: { backgroundColor: COLORS.success, padding: 14, borderRadius: 12, alignItems: 'center', marginTop: 10 },
+  transcribeBtnText: { color: COLORS.card, fontWeight: '700' },
   transcriptText: { fontSize: 13, color: COLORS.text, lineHeight: 20 },
   listItem: { fontSize: 14, marginBottom: 8 },
 });
