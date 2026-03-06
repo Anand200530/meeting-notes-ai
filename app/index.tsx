@@ -6,8 +6,8 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 
 const DEMO_MEETINGS = [
-  { id: '1', title: 'Weekly Team Standup', duration: '15:32', date: new Date().toISOString(), speakers: [], aiSummary: null, folder: 'Work', hasAudio: false, audioUri: '' },
-  { id: '2', title: 'Product Review', duration: '28:15', date: new Date(Date.now() - 86400000).toISOString(), speakers: [], aiSummary: null, folder: 'Product', hasAudio: false, audioUri: '' },
+  { id: '1', title: 'Weekly Team Standup', duration: '15:32', date: new Date().toISOString(), speakers: [], aiSummary: null, folder: 'Work', hasAudio: false, audioUri: '', transcript: '' },
+  { id: '2', title: 'Product Review', duration: '28:15', date: new Date(Date.now() - 86400000).toISOString(), speakers: [], aiSummary: null, folder: 'Product', hasAudio: false, audioUri: '', transcript: '' },
 ];
 
 const FOLDERS = ['All', 'Work', 'Product', 'Personal'];
@@ -20,6 +20,7 @@ export default function HomeScreen() {
   const [showRecord, setShowRecord] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [apiKey, setApiKey] = useState('');
+  const [assemblyKey, setAssemblyKey] = useState('');
   const [demoMode, setDemoMode] = useState(true);
   const [recording, setRecording] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
@@ -42,13 +43,14 @@ export default function HomeScreen() {
       if (settings) {
         const p = JSON.parse(settings);
         setApiKey(p.openai || '');
+        setAssemblyKey(p.assemblyai || '');
         setDemoMode(p.demoMode !== false);
       }
     } catch {} 
   };
   
   const saveSettings = async () => {
-    try { await AsyncStorage.setItem('@settings', JSON.stringify({ openai: apiKey, demoMode })); } catch {}
+    try { await AsyncStorage.setItem('@settings', JSON.stringify({ openai: apiKey, assemblyai: assemblyKey, demoMode })); } catch {}
   };
 
   const filtered = meetings.filter(m => (folder === 'All' || m.folder === folder) && m.title.toLowerCase().includes(search.toLowerCase()));
@@ -65,9 +67,9 @@ export default function HomeScreen() {
         await recording.stopAndUnloadAsync();
         const uri = recording.getURI();
         await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
-        const newMeeting = { id: Date.now().toString(), title: title || 'Meeting ' + (meetings.length + 1), duration: formatTime(duration), date: new Date().toISOString(), audioUri: uri, folder: recFolder, speakers, aiSummary: null, hasAudio: true };
+        const newMeeting = { id: Date.now().toString(), title: title || 'Meeting ' + (meetings.length + 1), duration: formatTime(duration), date: new Date().toISOString(), audioUri: uri, folder: recFolder, speakers, aiSummary: null, hasAudio: true, transcript: '' };
         setMeetings([newMeeting, ...meetings]);
-        Alert.alert('Recording Saved!', 'Tap meeting to play it back.');
+        Alert.alert('Recording Saved!', 'Tap meeting to transcribe or play.');
         closeModals();
         setTitle(''); setDuration(0); setRecording(null); setSpeakers([]); setSpeakerInput('');
       } catch (e) { Alert.alert('Error', 'Could not save recording'); }
@@ -106,6 +108,69 @@ export default function HomeScreen() {
   const addSpeaker = () => { const n = speakerInput.trim(); if (n && !speakers.includes(n)) { setSpeakers([...speakers, n]); setSpeakerInput(''); } };
   const removeSpeaker = (n) => setSpeakers(speakers.filter(s => s !== n));
 
+  // Transcribe with AssemblyAI (free tier)
+  const transcribeWithAssemblyAI = async (audioUri) => {
+    try {
+      // Upload audio first
+      const response = await fetch(audioUri);
+      const blob = await response.blob();
+      const arrayBuffer = await blob.arrayBuffer();
+      const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+      
+      const uploadRes = await fetch('https://api.assemblyai.com/v2/upload', {
+        method: 'POST',
+        headers: { 'Authorization': assemblyKey },
+        body: base64
+      });
+      const uploadData = await uploadRes.json();
+      const audioUrl = uploadData.upload_url;
+      
+      // Start transcription
+      const transRes = await fetch('https://api.assemblyai.com/v2/transcript', {
+        method: 'POST',
+        headers: { 'Authorization': assemblyKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audio_url: audioUrl })
+      });
+      const transData = await transRes.json();
+      
+      // Poll for completion
+      let result;
+      while (true) {
+        await new Promise(r => setTimeout(r, 2000));
+        const checkRes = await fetch('https://api.assemblyai.com/v2/transcript/' + transData.id, {
+          headers: { 'Authorization': assemblyKey }
+        });
+        result = await checkRes.json();
+        if (result.status === 'completed') break;
+        if (result.status === 'error') throw new Error('Transcription failed');
+      }
+      
+      return result.text;
+    } catch (e) {
+      throw new Error('AssemblyAI transcription failed: ' + e.message);
+    }
+  };
+
+  // Generate summary with GPT
+  const generateSummary = async (transcript, meetingTitle) => {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
+      body: JSON.stringify({ 
+        model: 'gpt-3.5-turbo', 
+        messages: [
+          { role: 'system', content: 'You are a meeting notes analyzer. Return valid JSON with summary, keyPoints, actionItems.' },
+          { role: 'user', content: 'Analyze this transcript and provide JSON:\n' + transcript.substring(0, 6000) }
+        ], 
+        temperature: 0.3,
+        response_format: { type: 'json_object' }
+      }),
+    });
+    if (!response.ok) throw new Error('GPT failed');
+    const data = await response.json();
+    return JSON.parse(data.choices[0].message.content);
+  };
+
   const generateDemoSummary = (meetingTitle) => ({
     summary: 'This was a productive meeting focused on ' + meetingTitle.toLowerCase() + '.',
     keyPoints: ['Discussion on ' + meetingTitle.toLowerCase(), 'Team coordination', 'Next steps'],
@@ -114,27 +179,63 @@ export default function HomeScreen() {
 
   const handleProcess = async () => {
     if (!selected) return;
+    
+    // Demo mode
     if (demoMode) {
       setProcessing(true);
       await new Promise(r => setTimeout(r, 1500));
       const aiSummary = generateDemoSummary(selected.title);
-      setMeetings(meetings.map(m => m.id === selected.id ? { ...m, aiSummary } : m));
-      setSelected({ ...selected, aiSummary });
+      setMeetings(meetings.map(m => m.id === selected.id ? { ...m, aiSummary, transcript: 'Demo transcript text' } : m));
+      setSelected({ ...selected, aiSummary, transcript: 'Demo transcript text' });
       setProcessing(false);
       Alert.alert('Done', 'Demo summary generated!');
-    } else {
-      Alert.alert('API Required', 'Add OpenAI API key to generate real summary.');
+      return;
     }
+    
+    // No API keys
+    if (!assemblyKey && !apiKey) {
+      Alert.alert('API Keys Required', 'Add AssemblyAI key (free) for transcription,\nor OpenAI key for summaries.');
+      return;
+    }
+    
+    setProcessing(true);
+    try {
+      let transcript = selected.transcript || '';
+      let aiSummary = selected.aiSummary || null;
+      
+      // Transcribe if we have audio and AssemblyAI key
+      if (selected.hasAudio && assemblyKey && !transcript) {
+        Alert.alert('Transcribing...', 'Please wait');
+        transcript = await transcribeWithAssemblyAI(selected.audioUri);
+      }
+      
+      // Generate summary if we have transcript and OpenAI key
+      if (transcript && apiKey) {
+        Alert.alert('Summarizing...', 'Please wait');
+        aiSummary = await generateSummary(transcript, selected.title);
+      } else if (transcript && !apiKey) {
+        Alert.alert('Transcript Ready', 'Add OpenAI API key to generate summary.');
+      }
+      
+      const updated = { ...selected, transcript, aiSummary };
+      setMeetings(meetings.map(m => m.id === selected.id ? updated : m));
+      setSelected(updated);
+      Alert.alert('Done', aiSummary ? 'Transcript + Summary ready!' : 'Transcript ready!');
+    } catch (e) { 
+      Alert.alert('Error', e.message); 
+    }
+    setProcessing(false);
   };
 
   const exportAsText = (m) => {
     let t = m.title + '\nDuration: ' + m.duration + '\nDate: ' + new Date(m.date).toLocaleDateString() + '\nFolder: ' + m.folder + '\n';
+    if (m.transcript) { t += '\nTRANSCRIPT:\n' + m.transcript + '\n'; }
     if (m.aiSummary) { t += '\nSUMMARY:\n' + m.aiSummary.summary + '\n\nKEY POINTS:\n'; m.aiSummary.keyPoints.forEach(p => t += '- ' + p + '\n'); }
     return t;
   };
 
   const exportAsPDF = async (meeting) => {
-    const html = '<!DOCTYPE html><html><head><style>body{font-family:-apple-system;padding:40px}h1{color:#1a1a1a}p,li{color:#1f2937;line-height:1.6}ul{padding-left:20px}</style></head><body><h1>' + meeting.title + '</h1><p>' + meeting.duration + ' - ' + meeting.folder + '</p>' + (meeting.aiSummary ? '<h2>Summary</h2><p>' + meeting.aiSummary.summary + '</p><h2>Key Points</h2><ul>' + meeting.aiSummary.keyPoints.map(p => '<li>' + p + '</li>').join('') + '</ul>' : '<p>No summary.</p>') + '</body></html>';
+    const html = '<!DOCTYPE html><html><head><style>body{font-family:-apple-system;padding:40px}h1{color:#1a1a1a}p,li{color:#1f2937;line-height:1.6}ul{padding-left:20px}</style></head><body><h1>' + meeting.title + '</h1><p>' + meeting.duration + ' - ' + meeting.folder + '</p>' + (meeting.transcript ? '<h2>Transcript</h2><p>' + meeting.transcript + '</p>' : '') + (meeting.aiSummary ? '<h2>Summary</h2><p>' + meeting.aiSummary.summary + '</p><h2>Key Points</h2><ul>' + meeting.aiSummary.keyPoints.map(p => '<li>' + p + '</li>').join('') + '</ul>' : '<p>No summary.</p>') + '</body></html>';
     try { const { uri } = await Print.printToFileAsync({ html }); await Sharing.shareAsync(uri, { mimeType: 'application/pdf' }); } catch (e) { Alert.alert('Error', 'Could not export'); }
   };
 
@@ -143,7 +244,7 @@ export default function HomeScreen() {
       <TouchableOpacity style={styles.card} onPress={() => setSelected(item)}>
         <View style={styles.cardHeader}>
           <Text style={styles.cardDuration}>{item.duration}</Text>
-          {item.aiSummary ? <Text style={styles.aiTag}>AI</Text> : null}
+          {item.aiSummary ? <Text style={styles.aiTag}>AI</Text> : item.transcript ? <Text style={styles.transcriptTag}>TEXT</Text> : null}
         </View>
         <Text style={styles.cardTitle} numberOfLines={2}>{item.title}</Text>
         <Text style={styles.cardDate}>{new Date(item.date).toLocaleDateString()}</Text>
@@ -222,12 +323,20 @@ export default function HomeScreen() {
                 <ScrollView>
                   <View style={styles.demoBox}>
                     <Text style={styles.demoTitle}>Demo Mode</Text>
+                    <Text style={styles.demoDesc}>Test without API keys</Text>
                     <TouchableOpacity style={[styles.demoBtn, demoMode && styles.demoBtnActive]} onPress={() => setDemoMode(!demoMode)}>
                       <Text style={[styles.demoBtnText, demoMode && styles.demoBtnTextActive]}>{demoMode ? 'ON' : 'OFF'}</Text>
                     </TouchableOpacity>
                   </View>
-                  <Text style={styles.apiLabel}>OpenAI API Key</Text>
+                  
+                  <Text style={styles.apiLabel}>AssemblyAI API Key (Free Transcription)</Text>
+                  <TextInput style={styles.apiInput} placeholder="Enter your AssemblyAI key..." value={assemblyKey} onChangeText={setAssemblyKey} />
+                  <Text style={styles.apiHint}>Get free key at assemblyai.com</Text>
+                  
+                  <Text style={styles.apiLabel}>OpenAI API Key (Summary)</Text>
                   <TextInput style={styles.apiInput} placeholder="sk-..." secureTextEntry value={apiKey} onChangeText={setApiKey} />
+                  <Text style={styles.apiHint}>For GPT summarization</Text>
+                  
                   <TouchableOpacity style={styles.saveBtn} onPress={() => { saveSettings(); closeModals(); }}><Text style={styles.saveBtnText}>SAVE</Text></TouchableOpacity>
                 </ScrollView>
               </View>
@@ -251,19 +360,25 @@ export default function HomeScreen() {
               <Text style={styles.detailTitle}>{selected ? selected.title : ''}</Text>
               <Text style={styles.detailMeta}>{selected ? selected.duration : ''} - {selected ? selected.folder : ''}</Text>
               
-              {selected && selected.hasAudio && !selected.aiSummary ? (
+              {selected && selected.hasAudio && !selected.transcript ? (
                 <View style={styles.playBox}>
                   <Text style={styles.playTitle}>Test Recording</Text>
                   <TouchableOpacity style={styles.playBtn} onPress={() => isPlaying ? stopAudio() : playAudio(selected.audioUri)}>
                     <Text style={styles.playBtnText}>{isPlaying ? 'STOP' : 'PLAY'}</Text>
                   </TouchableOpacity>
-                  <Text style={styles.playHint}>Tap to hear your recording</Text>
+                </View>
+              ) : null}
+              
+              {selected && selected.transcript ? (
+                <View style={styles.section}>
+                  <Text style={styles.sectionTitle}>TRANSCRIPT</Text>
+                  <Text style={styles.transcriptText}>{selected.transcript}</Text>
                 </View>
               ) : null}
               
               {selected && !selected.aiSummary ? (
                 <TouchableOpacity style={styles.processBtn} onPress={handleProcess} disabled={processing}>
-                  <Text style={styles.processBtnText}>{processing ? 'Processing...' : demoMode ? 'GENERATE (Demo)' : 'GENERATE SUMMARY'}</Text>
+                  <Text style={styles.processBtnText}>{processing ? 'Processing...' : demoMode ? 'GENERATE (Demo)' : 'TRANSCRIBE & SUMMARIZE'}</Text>
                 </TouchableOpacity>
               ) : null}
               
@@ -300,9 +415,10 @@ const styles = StyleSheet.create({
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
   cardDuration: { fontSize: 12, color: COLORS.textSecondary },
   aiTag: { fontSize: 10, backgroundColor: COLORS.accent, color: COLORS.card, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10, fontWeight: '600' },
+  transcriptTag: { fontSize: 10, backgroundColor: COLORS.success, color: COLORS.card, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10, fontWeight: '600' },
   cardTitle: { fontSize: 15, fontWeight: '600', color: COLORS.text, marginBottom: 4 },
   cardDate: { fontSize: 12, color: COLORS.textSecondary },
-  audioTag: { fontSize: 10, color: COLORS.success, marginTop: 4 },
+  audioTag: { fontSize: 10, color: COLORS.warning, marginTop: 4 },
   empty: { alignItems: 'center', paddingTop: 60 },
   emptyText: { fontSize: 18, fontWeight: '600', color: COLORS.text },
   fab: { position: 'absolute', bottom: 30, right: 30, width: 60, height: 60, borderRadius: 30, backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center' },
@@ -333,13 +449,15 @@ const styles = StyleSheet.create({
   recIcon: { fontSize: 16, fontWeight: '700', color: COLORS.card },
   recTime: { fontSize: 14, color: COLORS.textSecondary },
   demoBox: { backgroundColor: '#dcfce7', padding: 20, borderRadius: 16, marginBottom: 20, alignItems: 'center' },
-  demoTitle: { fontSize: 18, fontWeight: '700', color: '#166534', marginBottom: 12 },
+  demoTitle: { fontSize: 18, fontWeight: '700', color: '#166534', marginBottom: 4 },
+  demoDesc: { fontSize: 12, color: '#166534', marginBottom: 12 },
   demoBtn: { backgroundColor: COLORS.card, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 20, borderWidth: 2, borderColor: '#166534' },
   demoBtnActive: { backgroundColor: '#166534' },
   demoBtnText: { fontSize: 14, fontWeight: '700', color: '#166534' },
   demoBtnTextActive: { color: COLORS.card },
   apiLabel: { fontSize: 14, fontWeight: '600', marginBottom: 8, marginTop: 16 },
   apiInput: { backgroundColor: COLORS.background, padding: 14, borderRadius: 12, fontSize: 14 },
+  apiHint: { fontSize: 11, color: COLORS.textSecondary, marginTop: 4, marginBottom: 8 },
   saveBtn: { backgroundColor: COLORS.primary, padding: 16, borderRadius: 12, alignItems: 'center', marginTop: 24 },
   saveBtnText: { color: COLORS.card, fontWeight: '700' },
   detailOverlay: { flex: 1, backgroundColor: COLORS.background },
@@ -355,10 +473,10 @@ const styles = StyleSheet.create({
   playTitle: { fontSize: 16, fontWeight: '600', color: '#1e40af', marginBottom: 12 },
   playBtn: { backgroundColor: '#2563eb', paddingHorizontal: 32, paddingVertical: 16, borderRadius: 12 },
   playBtnText: { color: COLORS.card, fontWeight: '700', fontSize: 16 },
-  playHint: { fontSize: 12, color: '#6b7280', marginTop: 8 },
-  processBtn: { backgroundColor: COLORS.accent, padding: 16, borderRadius: 12, alignItems: 'center' },
+  processBtn: { backgroundColor: COLORS.accent, padding: 16, borderRadius: 12, alignItems: 'center', marginTop: 10 },
   processBtnText: { color: COLORS.card, fontWeight: '700' },
   section: { backgroundColor: COLORS.card, borderRadius: 16, padding: 16, marginBottom: 16 },
   sectionTitle: { fontSize: 12, fontWeight: '700', color: COLORS.accent, letterSpacing: 1, marginBottom: 12 },
+  transcriptText: { fontSize: 13, color: COLORS.text, lineHeight: 20 },
   listItem: { fontSize: 14, marginBottom: 8 },
 });
