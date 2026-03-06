@@ -4,6 +4,7 @@ import { Audio } from 'expo-av';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import * as FileSystem from 'expo-file-system';
 
 const DEMO_MEETINGS = [
   { id: '1', title: 'Weekly Team Standup', duration: '15:32', date: new Date().toISOString(), speakers: [], aiSummary: null, folder: 'Work', hasAudio: false, audioUri: '', transcript: '' },
@@ -106,16 +107,32 @@ export default function HomeScreen() {
   const addSpeaker = () => { const n = speakerInput.trim(); if (n && !speakers.includes(n)) { setSpeakers([...speakers, n]); setSpeakerInput(''); } };
   const removeSpeaker = (n) => setSpeakers(speakers.filter(s => s !== n));
 
-  // Transcribe with AssemblyAI
+  // Transcribe with AssemblyAI - works on mobile
   const transcribeAudio = async (audioUri) => {
     if (!assemblyKey) throw new Error('Add AssemblyAI key in Settings first');
     
     try {
       let audioUrl = audioUri;
       
-      // If it's a local file, we need special handling
-      if (audioUri.startsWith('blob:') || audioUri.startsWith('file://')) {
-        throw new Error('Please use a URL or try on mobile app');
+      // For local files (Expo Go), we need to upload first
+      if (audioUri.startsWith('file://') || audioUri.startsWith('/') || audioUri.startsWith('cache')) {
+        // Read file and convert to base64
+        const base64 = await FileSystem.readAsStringAsync(audioUri, { encoding: FileSystem.EncodingType.Base64 });
+        
+        // Upload to AssemblyAI
+        const uploadRes = await fetch('https://api.assemblyai.com/v2/upload', {
+          method: 'POST',
+          headers: { 'Authorization': assemblyKey },
+          body: base64
+        });
+        
+        const uploadData = await uploadRes.json();
+        
+        if (!uploadData.upload_url) {
+          throw new Error('Upload failed: ' + JSON.stringify(uploadData));
+        }
+        
+        audioUrl = uploadData.upload_url;
       }
       
       // Start transcription
@@ -127,12 +144,8 @@ export default function HomeScreen() {
       
       const transData = await transRes.json();
       
-      if (transRes.status !== 200 && transData.error) {
-        throw new Error(transData.error);
-      }
-      
       if (!transData.id) {
-        throw new Error('Transcription request failed');
+        throw new Error('Transcription failed: ' + JSON.stringify(transData));
       }
       
       // Poll for result
