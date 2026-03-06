@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, TextInput, FlatList, Modal, Alert, ActivityIndicator, ScrollView, Share, SafeAreaView, StatusBar, Keyboard, TouchableWithoutFeedback, Platform, KeyboardAvoidingView } from 'react-native';
+import { StyleSheet, Text, View, TouchableOpacity, TextInput, FlatList, Modal, Alert, ScrollView, Share, SafeAreaView, StatusBar, Keyboard, TouchableWithoutFeedback, Platform, KeyboardAvoidingView } from 'react-native';
 import { Audio } from 'expo-av';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Print from 'expo-print';
@@ -111,54 +111,47 @@ export default function HomeScreen() {
     if (!assemblyKey) throw new Error('Add AssemblyAI key in Settings first');
     
     try {
-      // For local file, we need to read and upload
       let audioUrl = audioUri;
       
-      if (audioUri.startsWith('file://') || audioUri.startsWith('/')) {
-        // Fetch the file
-        const response = await fetch(audioUri);
-        const blob = await response.blob();
-        
-        // Convert to base64 using FileReader
-        const base64 = await new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result.split(',')[1]);
-          reader.onerror = reject;
-          reader.readAsDataURL(blob);
-        });
-        
-        // Upload to AssemblyAI
-        const uploadRes = await fetch('https://api.assemblyai.com/v2/upload', {
-          method: 'POST',
-          headers: { 'Authorization': assemblyKey },
-          body: base64
-        });
-        
-        const uploadData = await uploadRes.json();
-        if (!uploadData.upload_url) throw new Error('Upload failed');
-        audioUrl = uploadData.upload_url;
+      // If it's a local file, we need special handling
+      if (audioUri.startsWith('blob:') || audioUri.startsWith('file://')) {
+        throw new Error('Please use a URL or try on mobile app');
       }
       
       // Start transcription
       const transRes = await fetch('https://api.assemblyai.com/v2/transcript', {
         method: 'POST',
         headers: { 'Authorization': assemblyKey, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ audio_url: audioUrl })
+        body: JSON.stringify({ audio_url: audioUrl, language_code: 'en' })
       });
+      
       const transData = await transRes.json();
       
-      if (!transData.id) throw new Error('Transcription request failed');
+      if (transRes.status !== 200 && transData.error) {
+        throw new Error(transData.error);
+      }
+      
+      if (!transData.id) {
+        throw new Error('Transcription request failed');
+      }
       
       // Poll for result
       let result;
-      while (true) {
+      let attempts = 0;
+      while (attempts < 60) {
         await new Promise(r => setTimeout(r, 2000));
         const checkRes = await fetch('https://api.assemblyai.com/v2/transcript/' + transData.id, {
           headers: { 'Authorization': assemblyKey }
         });
         result = await checkRes.json();
+        
         if (result.status === 'completed') break;
-        if (result.status === 'error') throw new Error('Transcription failed');
+        if (result.status === 'error') throw new Error(result.error || 'Transcription failed');
+        attempts++;
+      }
+      
+      if (!result || result.status !== 'completed') {
+        throw new Error('Transcription timed out');
       }
       
       return result.text;
@@ -167,7 +160,6 @@ export default function HomeScreen() {
     }
   };
 
-  // Generate summary with GPT
   const generateSummary = async (transcript, meetingTitle) => {
     if (!apiKey) throw new Error('Add OpenAI key in Settings first');
     
@@ -196,7 +188,7 @@ export default function HomeScreen() {
     }
     
     if (!assemblyKey) {
-      Alert.alert('API Key Required', 'Add AssemblyAI key in Settings to transcribe');
+      Alert.alert('API Key Required', 'Add AssemblyAI key in Settings');
       return;
     }
     
@@ -221,7 +213,7 @@ export default function HomeScreen() {
     }
     
     if (!apiKey) {
-      Alert.alert('API Key Required', 'Add OpenAI key in Settings to summarize');
+      Alert.alert('API Key Required', 'Add OpenAI key in Settings');
       return;
     }
     
@@ -247,7 +239,7 @@ export default function HomeScreen() {
   };
 
   const exportAsPDF = async (meeting) => {
-    const html = '<!DOCTYPE html><html><head><style>body{font-family:-apple-system;padding:40px}h1{color:#1a1a1a}p,li{color:#1f2937;line-height:1.6}ul{padding-left:20px}</style></head><body><h1>' + meeting.title + '</h1><p>' + meeting.duration + ' - ' + meeting.folder + '</p>' + (meeting.transcript ? '<h2>Transcript</h2><p>' + meeting.transcript + '</p>' : '') + (meeting.aiSummary ? '<h2>Summary</h2><p>' + meeting.aiSummary.summary + '</h2><p>Key Points</h2><ul>' + meeting.aiSummary.keyPoints.map(p => '<li>' + p + '</li>').join('') + '</ul>' : '<p>No summary.</p>') + '</body></html>';
+    const html = '<!DOCTYPE html><html><head><style>body{font-family:-apple-system;padding:40px}h1{color:#1a1a1a}p,li{color:#1f2937;line-height:1.6}ul{padding-left:20px}</style></head><body><h1>' + meeting.title + '</h1><p>' + meeting.duration + ' - ' + meeting.folder + '</p>' + (meeting.transcript ? '<h2>Transcript</h2><p>' + meeting.transcript + '</p>' : '') + (meeting.aiSummary ? '<h2>Summary</h2><p>' + meeting.aiSummary.summary + '</p><h2>Key Points</h2><ul>' + meeting.aiSummary.keyPoints.map(p => '<li>' + p + '</li>').join('') + '</ul>' : '<p>No summary.</p>') + '</body></html>';
     try { const { uri } = await Print.printToFileAsync({ html }); await Sharing.shareAsync(uri, { mimeType: 'application/pdf' }); } catch (e) { Alert.alert('Error', 'Could not export'); }
   };
 
