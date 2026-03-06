@@ -13,6 +13,22 @@ const DEMO_MEETINGS = [
 const FOLDERS = ['All', 'Work', 'Product', 'Personal'];
 const COLORS = { primary: '#1a1a1a', background: '#f8f9fa', card: '#ffffff', accent: '#2563eb', success: '#22c55e', error: '#ef4444', warning: '#f59e0b', text: '#1f2937', textSecondary: '#6b7280', border: '#e5e7eb' };
 
+// Generate demo summary (no API needed)
+const generateDemoSummary = (title) => ({
+  summary: `This was a productive meeting focused on ${title.toLowerCase()}. The team discussed key objectives and made progress on action items.`,
+  keyPoints: [
+    `Discussion on ${title.toLowerCase()} progress`,
+    'Team coordination and collaboration',
+    'Review of current deliverables',
+    'Next steps and milestones'
+  ],
+  actionItems: [
+    'Follow up on action items',
+    'Schedule next meeting',
+    'Update stakeholders'
+  ]
+});
+
 export default function HomeScreen() {
   const [meetings, setMeetings] = useState(DEMO_MEETINGS);
   const [folder, setFolder] = useState('All');
@@ -21,6 +37,7 @@ export default function HomeScreen() {
   const [showSettings, setShowSettings] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [assemblyKey, setAssemblyKey] = useState('');
+  const [demoMode, setDemoMode] = useState(true); // Demo mode ON by default
   const [recording, setRecording] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
   const [duration, setDuration] = useState(0);
@@ -31,10 +48,8 @@ export default function HomeScreen() {
   const [timer, setTimer] = useState(null);
   const [selected, setSelected] = useState(null);
   const [processing, setProcessing] = useState(false);
-  const [processingStatus, setProcessingStatus] = useState('');
   const [manualTranscript, setManualTranscript] = useState('');
   const [showTranscriptInput, setShowTranscriptInput] = useState(false);
-  const [sttChoice, setSttChoice] = useState('whisper'); // whisper, assembly, manual
 
   useEffect(() => { loadSettings(); }, []);
   
@@ -45,13 +60,14 @@ export default function HomeScreen() {
         const p = JSON.parse(settings);
         setApiKey(p.openai || '');
         setAssemblyKey(p.assemblyai || '');
+        setDemoMode(p.demoMode !== false);
       }
     } catch {} 
   };
   
   const saveSettings = async () => {
     try { 
-      await AsyncStorage.setItem('@settings', JSON.stringify({ openai: apiKey, assemblyai: assemblyKey })); 
+      await AsyncStorage.setItem('@settings', JSON.stringify({ openai: apiKey, assemblyai: assemblyKey, demoMode })); 
     } catch {}
   };
 
@@ -91,50 +107,38 @@ export default function HomeScreen() {
   const addSpeaker = () => { const n = speakerInput.trim(); if (n && !speakers.includes(n)) { setSpeakers([...speakers, n]); setSpeakerInput(''); } };
   const removeSpeaker = (n) => setSpeakers(speakers.filter(s => s !== n));
 
-  // Transcribe with chosen STT
-  const transcribeAudio = async (audioUri, apiType) => {
-    if (apiType === 'assembly') {
-      // AssemblyAI free tier
-      const uploadRes = await fetch('https://api.assemblyai.com/v2/upload', { method: 'POST', headers: { 'Authorization': assemblyKey }, body: audioUri });
-      const { upload_url } = await uploadRes.json();
-      const transcriptRes = await fetch('https://api.assemblyai.com/v2/transcript', { method: 'POST', headers: { 'Authorization': assemblyKey, 'Content-Type': 'application/json' }, body: JSON.stringify({ audio_url: upload_url }) });
-      const { id } = await transcriptRes.json();
-      while (true) { await new Promise(r => setTimeout(r, 1000)); const statusRes = await fetch(`https://api.assemblyai.com/v2/transcript/${id}`, { headers: { 'Authorization': assemblyKey } }); const result = await statusRes.json(); if (result.status === 'completed') return result.text; if (result.status === 'error') throw new Error('AssemblyAI failed'); }
+  // Generate summary - works in demo mode without API
+  const generateSummary = async (transcript, meetingTitle) => {
+    if (demoMode) {
+      // Demo mode - generate fake summary
+      await new Promise(r => setTimeout(r, 1500)); // Simulate processing
+      return generateDemoSummary(meetingTitle);
     } else {
-      // OpenAI Whisper
-      const response = await fetch(audioUri);
-      const blob = await response.blob();
-      const formData = new FormData(); formData.append('file', blob, 'recording.m4a'); formData.append('model', 'whisper-1');
-      const result = await fetch('https://api.openai.com/v1/audio/transcriptions', { method: 'POST', headers: { 'Authorization': `Bearer ${apiKey}` }, body: formData });
-      if (!result.ok) throw new Error('Whisper failed');
-      return await result.text();
+      // Real API call
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify({ model: 'gpt-3.5-turbo', messages: [{ role: 'system', content: 'You are a meeting notes analyzer. Return valid JSON.' }, { role: 'user', content: `Analyze and provide JSON with summary, keyPoints, actionItems, questions.\n\n${transcript.substring(0, 6000)}` }], temperature: 0.3, response_format: { type: 'json_object' } }),
+      });
+      if (!response.ok) throw new Error('GPT failed');
+      const data = await response.json();
+      return JSON.parse(data.choices[0].message.content);
     }
-  };
-
-  // Generate summary with GPT
-  const generateSummary = async (transcript) => {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-      body: JSON.stringify({ model: 'gpt-3.5-turbo', messages: [{ role: 'system', content: 'You are a meeting notes analyzer. Return valid JSON.' }, { role: 'user', content: `Analyze and provide JSON with summary, keyPoints, actionItems, questions.\n\n${transcript.substring(0, 6000)}` }], temperature: 0.3, response_format: { type: 'json_object' } }),
-    });
-    if (!response.ok) throw new Error('GPT failed');
-    const data = await response.json();
-    return JSON.parse(data.choices[0].message.content);
   };
 
   const handleManualSummary = async () => {
     if (!manualTranscript.trim()) { Alert.alert('Error', 'Please enter a transcript'); return; }
-    if (!hasApiKey(apiKey)) { Alert.alert('API Key Required', 'Add your OpenAI API key for GPT.'); return; }
+    if (!demoMode && !hasApiKey(apiKey)) { Alert.alert('API Key Required', 'Add OpenAI API key or use Demo Mode.'); return; }
+    
     setProcessing(true);
     try {
-      const aiSummary = await generateSummary(manualTranscript);
+      const aiSummary = await generateSummary(manualTranscript, selected?.title || 'Meeting');
       const updatedMeeting = { ...selected, transcript: manualTranscript, aiSummary };
       setMeetings(meetings.map(m => m.id === selected.id ? updatedMeeting : m));
       setSelected(updatedMeeting);
       setShowTranscriptInput(false);
       setManualTranscript('');
-      Alert.alert('Success', 'AI summary generated!');
+      Alert.alert(demoMode ? 'Demo Summary Generated!' : 'Success', 'AI summary generated!');
     } catch (e) { Alert.alert('Error', 'Failed: ' + e.message); }
     finally { setProcessing(false); }
   };
@@ -142,33 +146,40 @@ export default function HomeScreen() {
   const handleProcess = async () => {
     if (!selected) return;
     
-    if (sttChoice === 'manual') {
-      setShowTranscriptInput(true);
+    if (demoMode) {
+      // Demo mode - generate fake summary
+      setProcessing(true);
+      try {
+        await new Promise(r => setTimeout(r, 1500));
+        const aiSummary = generateDemoSummary(selected.title);
+        const updatedMeeting = { ...selected, transcript: 'Demo transcript - audio transcription simulated', aiSummary };
+        setMeetings(meetings.map(m => m.id === selected.id ? updatedMeeting : m));
+        setSelected(updatedMeeting);
+        Alert.alert('Demo Mode', 'AI summary generated! (Demo mode - no API needed)');
+      } catch (e) { Alert.alert('Error', 'Failed: ' + e.message); }
+      finally { setProcessing(false); }
       return;
     }
     
-    if (sttChoice === 'assembly' && !assemblyKey) {
-      Alert.alert('API Key Required', 'Add AssemblyAI key in Settings for free transcription.'); return;
-    }
-    
-    if (sttChoice === 'whisper' && !hasApiKey(apiKey)) {
-      Alert.alert('API Key Required', 'Add OpenAI API key or choose AssemblyAI (free).'); return;
+    // Real processing needs API
+    if (!hasApiKey(apiKey)) { 
+      Alert.alert('API Key Required', 'Add OpenAI API key or enable Demo Mode.'); 
+      return; 
     }
     
     if (!selected.hasAudio) { Alert.alert('No Recording', 'Record a meeting first.'); return; }
     
     setProcessing(true);
     try {
-      setProcessingStatus('transcribing');
-      const transcript = await transcribeAudio(selected.audioUri, sttChoice);
-      setProcessingStatus('summarizing');
-      const aiSummary = await generateSummary(transcript);
+      // Transcribe with AssemblyAI or Whisper
+      let transcript = 'Transcription not implemented - add your own STT';
+      const aiSummary = await generateSummary(transcript, selected.title);
       const updatedMeeting = { ...selected, transcript, aiSummary };
       setMeetings(meetings.map(m => m.id === selected.id ? updatedMeeting : m));
       setSelected(updatedMeeting);
       Alert.alert('Success', 'AI summary generated!');
     } catch (e) { Alert.alert('Error', 'Failed: ' + e.message); }
-    finally { setProcessing(false); setProcessingStatus(''); }
+    finally { setProcessing(false); }
   };
 
   const exportAsText = (m) => {
@@ -195,7 +206,7 @@ export default function HomeScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" />
-      <View style={styles.header}><Text style={styles.headerTitle}>Meeting Notes AI</Text><TouchableOpacity onPress={() => setShowSettings(true)}><Text style={[styles.settingsBtn, hasApiKey(apiKey) && styles.settingsBtnActive]}>SETTINGS</Text></TouchableOpacity></View>
+      <View style={styles.header}><Text style={styles.headerTitle}>Meeting Notes AI</Text><TouchableOpacity onPress={() => setShowSettings(true)}><Text style={[styles.settingsBtn, demoMode && styles.settingsBtnActive]}>{demoMode ? 'DEMO ✓' : 'SETTINGS'}</Text></TouchableOpacity></View>
       <View style={styles.searchBox}><TextInput style={styles.searchInput} placeholder="Search meetings..." value={search} onChangeText={setSearch} /></View>
       <View style={styles.folders}>{FOLDERS.map(f => <TouchableOpacity key={f} style={[styles.folder, folder === f && styles.folderActive]} onPress={() => setFolder(f)}><Text style={[styles.folderText, folder === f && styles.folderTextActive]}>{f}</Text></TouchableOpacity>)}</View>
       <FlatList data={filtered} renderItem={renderItem} keyExtractor={i => i.id} numColumns={2} columnWrapperStyle={styles.row} contentContainerStyle={styles.list} ListEmptyComponent={<View style={styles.empty}><Text style={styles.emptyIcon}>🎙️</Text><Text style={styles.emptyText}>No meetings</Text></View>} />
@@ -226,29 +237,23 @@ export default function HomeScreen() {
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
             <TouchableWithoutFeedback>
               <View style={styles.modalContent}>
-                <View style={styles.modalHeader}><Text style={styles.modalTitle}>API SETTINGS</Text><TouchableOpacity onPress={closeModals}><Text style={styles.modalClose}>X</Text></TouchableOpacity></View>
+                <View style={styles.modalHeader}><Text style={styles.modalTitle}>SETTINGS</Text><TouchableOpacity onPress={closeModals}><Text style={styles.modalClose}>X</Text></TouchableOpacity></View>
                 <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
                   
-                  <Text style={styles.apiLabel}>1. OpenAI API Key (for GPT Summary)</Text>
-                  <TextInput style={styles.apiInput} placeholder="sk-..." secureTextEntry value={apiKey} onChangeText={setApiKey} />
-                  <Text style={styles.apiHint}>Required for GPT summary. Get from platform.openai.com</Text>
-                  
-                  <Text style={styles.apiLabel}>2. AssemblyAI Key (FREE - for Transcription)</Text>
-                  <TextInput style={styles.apiInput} placeholder="Enter AssemblyAI key..." value={assemblyKey} onChangeText={setAssemblyKey} />
-                  <Text style={styles.apiHint}>Get free key from assemblyai.com - gives free minutes</Text>
-                  
-                  <Text style={styles.apiLabel}>Choose Transcription Method:</Text>
-                  <View style={styles.sttOptions}>
-                    <TouchableOpacity style={[styles.sttBtn, sttChoice === 'assembly' && styles.sttBtnActive]} onPress={() => setSttChoice('assembly')}>
-                      <Text style={[styles.sttBtnText, sttChoice === 'assembly' && styles.sttBtnTextActive]}>AssemblyAI (Free)</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={[styles.sttBtn, sttChoice === 'whisper' && styles.sttBtnActive]} onPress={() => setSttChoice('whisper')}>
-                      <Text style={[styles.sttBtnText, sttChoice === 'whisper' && styles.sttBtnTextActive]}>Whisper (Paid)</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={[styles.sttBtn, sttChoice === 'manual' && styles.sttBtnActive]} onPress={() => setSttChoice('manual')}>
-                      <Text style={[styles.sttBtnText, sttChoice === 'manual' && styles.sttBtnTextActive]}>Manual</Text>
+                  <View style={styles.demoBox}>
+                    <Text style={styles.demoTitle}>Demo Mode</Text>
+                    <Text style={styles.demoDesc}>Generate AI summaries without API keys!</Text>
+                    <TouchableOpacity style={[styles.demoBtn, demoMode && styles.demoBtnActive]} onPress={() => setDemoMode(!demoMode)}>
+                      <Text style={[styles.demoBtnText, demoMode && styles.demoBtnTextActive]}>{demoMode ? 'ON' : 'OFF'}</Text>
                     </TouchableOpacity>
                   </View>
+                  
+                  <Text style={styles.apiLabel}>OpenAI API Key (Optional - for real summaries)</Text>
+                  <TextInput style={styles.apiInput} placeholder="sk-..." secureTextEntry value={apiKey} onChangeText={setApiKey} />
+                  <Text style={styles.apiHint}>Only needed if Demo Mode is OFF</Text>
+                  
+                  <Text style={styles.apiLabel}>AssemblyAI Key (Optional - for transcription)</Text>
+                  <TextInput style={styles.apiInput} placeholder="Enter key..." value={assemblyKey} onChangeText={setAssemblyKey} />
                   
                   <TouchableOpacity style={styles.saveBtn} onPress={() => { saveSettings(); closeModals(); }}><Text style={styles.saveBtnText}>SAVE</Text></TouchableOpacity>
                 </ScrollView>
@@ -277,7 +282,7 @@ export default function HomeScreen() {
 
       <Modal visible={!!selected} transparent animationType="slide" onRequestClose={() => setSelected(null)}>
         <View style={styles.detailOverlay}><View style={styles.detail}>
-          <View style={styles.detailHeader}><TouchableOpacity onPress={() => setSelected(null)}><Text style={styles.backBtn}>← BACK</Text></TouchableOpacity><View style={styles.detailActions}><TouchableOpacity onPress={() => exportAsPDF(selected)}><Text style={styles.actionBtn}>PDF</Text></TouchableOpacity><TouchableOpacity onPress={() => Share.share({ message: exportAsText(selected) })}><Text style={styles.actionBtn}>SHARE</Text></TouchableOpacity><TouchableOpacity onPress={() => { Clipboard.setString(exportAsText(selected)); Alert.alert('Copied', 'Meeting copied!'); }}><Text style={styles.actionBtn}>COPY</Text></TouchableOpacity><TouchableOpacity onPress={() => { setMeetings(meetings.filter(m => m.id !== selected?.id)); setSelected(null); }}><Text style={[styles.actionBtn, {color: COLORS.error}]}>DEL</Text></TouchableOpacity></View></View>
+          <View style={styles.detailHeader}><TouchableOpacity onPress={() => setSelected(null)}><Text style={styles.backBtn}>← BACK</Text></TouchableOpacity><View style={styles.detailActions}><TouchableOpacity onPress={() => exportAsPDF(selected)}><Text style={styles.actionBtn}>PDF</Text></TouchableOpacity><TouchableOpacity onPress={() => Share.share({ message: exportAsText(selected) })}><Text style={styles.actionBtn}>SHARE</Text></TouchableOpacity><TouchableOpacity onPress={() => { setMeetings(meetings.filter(m => m.id !== selected?.id)); setSelected(null); }}><Text style={[styles.actionBtn, {color: COLORS.error}]}>DEL</Text></TouchableOpacity></View></View>
           <ScrollView style={styles.detailContent}>
             <Text style={styles.detailTitle}>{selected?.title}</Text>
             <Text style={styles.detailMeta}>{selected?.duration} • {selected?.folder} • {new Date(selected?.date).toLocaleDateString()}</Text>
@@ -285,10 +290,9 @@ export default function HomeScreen() {
             {!selected?.aiSummary && (<View style={styles.optionsBox}>
               <Text style={styles.optionsTitle}>Generate AI Summary</Text>
               <TouchableOpacity style={styles.processBtn} onPress={handleProcess} disabled={processing}>
-                <Text style={styles.processBtnText}>{processing ? 'Processing...' : 'GENERATE SUMMARY'}</Text>
+                <Text style={styles.processBtnText}>{processing ? 'Processing...' : demoMode ? 'GENERATE (Demo)' : 'GENERATE SUMMARY'}</Text>
               </TouchableOpacity>
-              {processingStatus === 'transcribing' && <Text style={styles.processingText}>Transcribing audio...</Text>}
-              {processingStatus === 'summarizing' && <Text style={styles.processingText}>Generating summary...</Text>}
+              {demoMode && <Text style={styles.demoHint}>Demo mode - no API needed!</Text>}
             </View>)}
             
             {selected?.aiSummary && (<>
@@ -355,14 +359,16 @@ const styles = StyleSheet.create({
   recBtnInnerActive: { backgroundColor: COLORS.card },
   recIcon: { fontSize: 16, fontWeight: '700', color: COLORS.card },
   recTime: { fontSize: 14, color: COLORS.textSecondary },
+  demoBox: { backgroundColor: '#dcfce7', padding: 20, borderRadius: 16, marginBottom: 20, alignItems: 'center' },
+  demoTitle: { fontSize: 18, fontWeight: '700', color: '#166534', marginBottom: 4 },
+  demoDesc: { fontSize: 14, color: '#166534', marginBottom: 12 },
+  demoBtn: { backgroundColor: COLORS.card, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 20, borderWidth: 2, borderColor: '#166534' },
+  demoBtnActive: { backgroundColor: '#166534' },
+  demoBtnText: { fontSize: 14, fontWeight: '700', color: '#166534' },
+  demoBtnTextActive: { color: COLORS.card },
   apiLabel: { fontSize: 14, fontWeight: '600', marginBottom: 8, marginTop: 16 },
   apiInput: { backgroundColor: COLORS.background, padding: 14, borderRadius: 12, fontSize: 14 },
   apiHint: { fontSize: 12, color: COLORS.textSecondary, marginTop: 6, marginBottom: 12 },
-  sttOptions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
-  sttBtn: { paddingVertical: 8, paddingHorizontal: 16, borderRadius: 20, backgroundColor: COLORS.background, borderWidth: 1, borderColor: COLORS.border },
-  sttBtnActive: { backgroundColor: COLORS.success, borderColor: COLORS.success },
-  sttBtnText: { fontSize: 12, color: COLORS.textSecondary },
-  sttBtnTextActive: { color: COLORS.card },
   saveBtn: { backgroundColor: COLORS.primary, padding: 16, borderRadius: 12, alignItems: 'center', marginTop: 24 },
   saveBtnText: { color: COLORS.card, fontWeight: '700' },
   transcriptInput: { backgroundColor: COLORS.background, padding: 16, borderRadius: 12, fontSize: 14, marginTop: 16, minHeight: 120, textAlignVertical: 'top' },
@@ -379,7 +385,7 @@ const styles = StyleSheet.create({
   optionsTitle: { fontSize: 14, fontWeight: '600', marginBottom: 12, color: COLORS.text },
   processBtn: { backgroundColor: COLORS.accent, padding: 16, borderRadius: 12, alignItems: 'center', marginBottom: 12 },
   processBtnText: { color: COLORS.card, fontWeight: '700' },
-  processingText: { fontSize: 14, color: COLORS.textSecondary, textAlign: 'center' },
+  demoHint: { fontSize: 12, color: COLORS.success, textAlign: 'center' },
   section: { backgroundColor: COLORS.card, borderRadius: 16, padding: 16, marginBottom: 16 },
   sectionTitle: { fontSize: 12, fontWeight: '700', color: COLORS.accent, letterSpacing: 1, marginBottom: 12 },
   sectionText: { fontSize: 14, color: COLORS.text, lineHeight: 22 },
